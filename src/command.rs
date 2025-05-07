@@ -1,26 +1,164 @@
-// NOTE: Could be also just a usize which represent flags
-pub struct Command {
-    pub ls: bool,
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use chrono::NaiveDate;
+
+/// A formidable command-line tool for managing digital assets.
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
 }
 
-impl Command {
-    fn new() -> Command {
-        return Command { ls: false };
-    }
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    /// List tasks with optional limit
+    LS (LSArgs),
 
-    pub fn parse(args: Vec<String>) -> Result<Command, String> {
-        let mut command: Command = Command::new();
+    /// Add a new task
+    #[command(visible_alias = "new")]
+    Add(AddArgs),
 
-        if args.len() == 0 {
-            return Err("No arguments provided".to_string());
+    /// Analyze tasks
+    Analyze(AnalyzeArgs),
+
+    /// Mark a task as done
+    Done {
+        /// Task ID to mark as done
+        id: usize,
+    },
+
+    /// Manage pomodoro sessions
+    #[command(visible_alias = "pm")]
+    Pomo(PomoArgs),
+}
+
+
+#[derive(Args, Debug)]
+pub struct LSArgs {
+    #[arg(short = 'l', long, default_value_t = 50)]
+    pub limit: usize,
+    #[arg(short = 'd', long, default_value_t = 1)]
+    pub days: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct AddArgs {
+    /// Task title
+    #[arg(short = 't', long)]
+    pub title: String,
+
+    /// Due date (YYYY-MM-DD)
+    #[arg(short, long = "due-date", value_parser = parse_date)]
+    pub due_date: Option<NaiveDate>,
+
+    /// Task priority
+    #[arg(short = 'p', long, value_enum, default_value_t = Priority::Medium)]
+    pub priority: Priority,
+
+    /// Task category
+    #[arg(short = 'c', long)]
+    pub category: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AnalyzeArgs {
+    /// Analyze tasks for n days before now
+    #[arg(long="days",short = 'n', value_parser = parse_date, default_value_t=1)]
+    pub days: usize ,
+}
+
+#[derive(Args, Debug)]
+pub struct PomoArgs {
+    #[command(subcommand)]
+    pub command: Option<PomoCommands>,
+
+    /// Pomodoro session title
+    #[arg(short = 't', long)]
+    pub title: Option<String>,
+
+    /// Session duration (e.g., 25m, 1h)
+    #[arg(long, value_parser = parse_duration)]
+    pub duration: Option<String>,
+
+    /// Session category
+    #[arg(short = 'c', long)]
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PomoCommands {
+    /// View pomodoro logs
+    Logs(PomoLogsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PomoLogsArgs {
+    /// Show logs since date (YYYY-MM-DD)
+    #[arg(long, value_parser = parse_date)]
+    pub since: Option<NaiveDate>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum Priority {
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+impl From<String> for Priority {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "low" => Priority::Low,
+            "medium" => Priority::Medium,
+            "high" => Priority::High,
+            "urgent" => Priority::Urgent,
+            _ => Priority::Medium,
         }
-
-        for arg in args {
-            if &arg == "ls" {
-                command.ls = true;
-            }
-        }
-
-        return Ok(command);
     }
+}
+
+impl From<usize> for Priority {
+    fn from(n: usize) -> Self {
+        match n {
+            1 => Priority::Low,
+            2 => Priority::Medium,
+            3 => Priority::High,
+            4 => Priority::Urgent,
+            _ => Priority::Medium,
+        }
+    }
+}
+
+impl From <Priority> for usize {
+    fn from(p: Priority) -> Self {
+        match p {
+            Priority::Low => 1,
+            Priority::Medium => 2,
+            Priority::High => 3,
+            Priority::Urgent => 4,
+        }
+    }
+}
+
+impl From<Priority> for String {
+    fn from(p: Priority) -> Self {
+        match p {
+            Priority::Low => "Low".to_string(),
+            Priority::Medium => "Medium".to_string(),
+            Priority::High => "High".to_string(),
+            Priority::Urgent => "Urgent".to_string(),
+        }
+    }
+}
+
+pub fn parse_date(date_str: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid date format: {}", e))
+}
+
+pub fn parse_duration(duration_str: &str) -> Result<String, String> {
+    // This is just a placeholder for actual duration parsing
+    // In a real implementation, you'd validate and parse the duration here
+    Ok(duration_str.to_string())
 }
