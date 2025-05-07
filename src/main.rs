@@ -1,6 +1,5 @@
-mod command;
-mod handlers;
 mod models;
+mod handlers;
 mod repository;
 mod parser;
 

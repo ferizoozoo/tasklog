@@ -1,4 +1,4 @@
-use crate::command::{CommandArgs, LSArgs};
+use crate::models::{CommandArgs, LSArgs};
 
 pub fn handle_ls(args: LSArgs) -> Result<(), String> {
     match validate_args(&args) {

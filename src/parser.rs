@@ -1,5 +1,5 @@
-use super::command::{format_string_with_color, Cli, Color, CommandArgs, Commands};
-use super::{command, handlers};
+use super::models::{format_string_with_color, Cli, Color, CommandArgs, Commands};
+use super::{models, handlers};
 use super::handlers::handle_ls;
 use clap::Parser;
 
@@ -34,28 +34,12 @@ pub fn execute() {
             println!("Analyzing tasks");
             println!("Since: {}", args.days);
         }
-        Commands::Done { id } => {
-            println!("Marking task {} as done", id);
+        Commands::Done(args) => {
+            println!("Marking task {:?} as done", args);
         }
-        Commands::Pomo(args) => match args.command {
-            Some(command::PomoCommands::Logs(log_args)) => {
-                println!("Viewing pomodoro logs");
-                if let Some(since) = log_args.since {
-                    println!("Since: {}", since);
-                }
-            }
-            None => {
-                println!("Starting pomodoro session");
-                if let Some(title) = args.title {
-                    println!("Title: {}", title);
-                }
-                if let Some(duration) = args.duration {
-                    println!("Duration: {}", duration);
-                }
-                if let Some(category) = args.category {
-                    println!("Category: {}", category);
-                }
-            }
+        Commands::Pomo(args) => {
+            println!("Starting pomo");
+            println!("{:?}", args);
         },
     }
 }
