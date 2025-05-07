@@ -1,9 +1,14 @@
+use chrono::{Local, NaiveDate};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use chrono::NaiveDate;
+use std::fmt::Debug;
+
+pub trait CommandArgs {
+    fn validate(&self) -> Result<(), String>;
+}
 
 /// A formidable command-line tool for managing digital assets.
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[derive(Debug, Parser)]
+#[command(author, version, about = "a cli based tasks manager tool", long_about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -11,27 +16,24 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// List tasks with optional limit
-    LS (LSArgs),
-
+    /// Initializes the database and required files
+    Init,
+    /// List tasks with an optional limit
+    LS(LSArgs),
     /// Add a new task
     #[command(visible_alias = "new")]
     Add(AddArgs),
-
     /// Analyze tasks
     Analyze(AnalyzeArgs),
-
     /// Mark a task as done
     Done {
         /// Task ID to mark as done
         id: usize,
     },
-
     /// Manage pomodoro sessions
     #[command(visible_alias = "pm")]
     Pomo(PomoArgs),
 }
-
 
 #[derive(Args, Debug)]
 pub struct LSArgs {
@@ -39,6 +41,18 @@ pub struct LSArgs {
     pub limit: usize,
     #[arg(short = 'd', long, default_value_t = 1)]
     pub days: usize,
+}
+
+impl CommandArgs for LSArgs {
+    fn validate(&self) -> Result<(), String> {
+        if self.limit > 100 {
+            return Err("Limit cannot be greater than 100".to_string());
+        }
+        if self.days > 365 {
+            return Err("Days cannot be greater than 365".to_string());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Args, Debug)]
@@ -60,11 +74,36 @@ pub struct AddArgs {
     pub category: Option<String>,
 }
 
+impl CommandArgs for AddArgs {
+    fn validate(&self) -> Result<(), String> {
+        if self.title.trim().is_empty() {
+            return Err("Title cannot be empty".to_string());
+        }
+
+        if let Some(due_date) = &self.due_date {
+            if due_date < &Local::now().naive_utc().date() {
+                return Err("Due date cannot be before 2020-01-01".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct AnalyzeArgs {
     /// Analyze tasks for n days before now
     #[arg(long="days",short = 'n', value_parser = parse_date, default_value_t=1)]
-    pub days: usize ,
+    pub days: usize,
+}
+
+impl CommandArgs for AnalyzeArgs {
+    fn validate(&self) -> Result<(), String> {
+        if self.days > 365 {
+            return Err("Days cannot be greater than 365".to_string());
+        };
+
+        Ok(())
+    }
 }
 
 #[derive(Args, Debug)]
@@ -85,10 +124,43 @@ pub struct PomoArgs {
     pub category: Option<String>,
 }
 
+impl CommandArgs for PomoArgs {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(command) = &self.command {
+            match command.validate() {
+                Ok(_) => (),
+                Err(e) => return Err(e),
+            }
+        }
+
+        if let Some(duration) = &self.duration {
+            if duration.trim().is_empty() {
+                return Err("Duration cannot be empty".to_string());
+            }
+        }
+
+        if let Some(title) = &self.title {
+            if title.trim().is_empty() {
+                return Err("Title cannot be empty".to_string());
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum PomoCommands {
     /// View pomodoro logs
     Logs(PomoLogsArgs),
+}
+
+impl CommandArgs for PomoCommands {
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            PomoCommands::Logs(args) => args.validate(),
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -98,6 +170,17 @@ pub struct PomoLogsArgs {
     pub since: Option<NaiveDate>,
 }
 
+impl CommandArgs for PomoLogsArgs {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(since) = &self.since {
+            if since < &Local::now().naive_utc().date() {
+                return Err("Since date cannot be before 2020-01-01".to_string());
+            };
+        };
+
+        Ok(())
+    }
+}
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum Priority {
     Low,
@@ -130,7 +213,7 @@ impl From<usize> for Priority {
     }
 }
 
-impl From <Priority> for usize {
+impl From<Priority> for usize {
     fn from(p: Priority) -> Self {
         match p {
             Priority::Low => 1,
@@ -162,3 +245,29 @@ pub fn parse_duration(duration_str: &str) -> Result<String, String> {
     // In a real implementation, you'd validate and parse the duration here
     Ok(duration_str.to_string())
 }
+
+pub enum Color {
+    Red,
+    Green,
+    Blue,
+    Yellow,
+    Magenta,
+    Cyan,
+    White,
+    Black,
+}
+
+pub fn format_string_with_color(str: &str, color: Color) -> String {
+    match color {
+        Color::Red => format!("\x1b[91m{}\x1b[0m", str),
+        Color::Green => format!("\x1b[92m{}\x1b[0m", str),
+        Color::Blue => format!("\x1b[94m{}\x1b[0m", str),
+        Color::Yellow => format!("\x1b[93m{}\x1b[0m", str),
+        Color::Magenta => format!("\x1b[95m{}\x1b[0m", str),
+        Color::Cyan => format!("\x1b[96m{}\x1b[0m", str),
+        Color::White => format!("\x1b[97m{}\x1b[0m", str),
+        Color::Black => format!("\x1b[90m{}\x1b[0m", str),
+        _ => str.to_string(),
+    }
+}
+
