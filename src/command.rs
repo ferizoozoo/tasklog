@@ -22,7 +22,7 @@ pub enum Commands {
     LS(LSArgs),
     /// Add a new task
     #[command(visible_alias = "new")]
-    Add(AddArgs),
+    Add(Task),
     /// Analyze tasks
     Analyze(AnalyzeArgs),
     /// Mark a task as done
@@ -32,7 +32,7 @@ pub enum Commands {
     },
     /// Manage pomodoro sessions
     #[command(visible_alias = "pm")]
-    Pomo(PomoArgs),
+    Pomo(PomoTask),
 }
 
 #[derive(Args, Debug)]
@@ -55,26 +55,77 @@ impl CommandArgs for LSArgs {
     }
 }
 
+#[derive(Debug, ValueEnum, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+pub enum TaskStatus {
+    Done,
+    Pending,
+}
+
+impl Default for TaskStatus {
+    fn default() -> Self {
+        TaskStatus::Pending
+    }
+}
+
+impl From<TaskStatus> for String {
+    fn from(s: TaskStatus) -> Self {
+        match s {
+            TaskStatus::Done => "Done".to_string(),
+            TaskStatus::Pending => "Pending".to_string(),
+        }
+    }
+}
+
+impl From<TaskStatus> for usize {
+    fn from(s: TaskStatus) -> Self {
+        match s {
+            TaskStatus::Done => 1,
+            TaskStatus::Pending => 0,
+        }
+    }
+}
+
+impl From<usize> for TaskStatus {
+    fn from(n: usize) -> Self {
+        match n {
+            1 => TaskStatus::Done,
+            _ => TaskStatus::Pending,
+        }
+    }
+}
+
+impl From<String> for TaskStatus {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "done" => TaskStatus::Done,
+            _ => TaskStatus::Pending,
+        }
+    }
+}
+
+
 #[derive(Args, Debug)]
-pub struct AddArgs {
+pub struct Task {
+    #[clap(skip)]
+    pub id: u64,
+    #[clap(skip)]
+    pub status: TaskStatus,
+
     /// Task title
     #[arg(short = 't', long)]
     pub title: String,
-
     /// Due date (YYYY-MM-DD)
     #[arg(short, long = "due-date", value_parser = parse_date)]
     pub due_date: Option<NaiveDate>,
-
     /// Task priority
     #[arg(short = 'p', long, value_enum, default_value_t = Priority::Medium)]
     pub priority: Priority,
-
     /// Task category
     #[arg(short = 'c', long)]
     pub category: Option<String>,
 }
 
-impl CommandArgs for AddArgs {
+impl CommandArgs for Task {
     fn validate(&self) -> Result<(), String> {
         if self.title.trim().is_empty() {
             return Err("Title cannot be empty".to_string());
@@ -107,7 +158,7 @@ impl CommandArgs for AnalyzeArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct PomoArgs {
+pub struct PomoTask {
     #[command(subcommand)]
     pub command: Option<PomoCommands>,
 
@@ -124,7 +175,7 @@ pub struct PomoArgs {
     pub category: Option<String>,
 }
 
-impl CommandArgs for PomoArgs {
+impl CommandArgs for PomoTask {
     fn validate(&self) -> Result<(), String> {
         if let Some(command) = &self.command {
             match command.validate() {
@@ -270,4 +321,3 @@ pub fn format_string_with_color(str: &str, color: Color) -> String {
         _ => str.to_string(),
     }
 }
-
