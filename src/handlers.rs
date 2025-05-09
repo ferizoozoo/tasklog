@@ -1,14 +1,30 @@
 use crate::{
     helper::get_home_directory,
-    models::{CommandArgs, LSArgs},
-    repository::init_db,
+    models::{CommandArgs, LSArgs, Task,format_string_with_color, Color},
+    repository,
 };
-use std::env;
+use crate::repository::save_task;
 
 pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
     match validate_args(args) {
         Ok(_) => {
-            println!("inside handler {:?}", args);
+            match repository::get_tasks(args) {
+                Ok(t)  => {
+                    println!("{:?}", t);
+                    Ok(())
+                },
+                Err(e) => Err(format_string_with_color(e.as_str(), Color::Red)),
+            }
+        }
+        Err(e) => Err(format!("Error: {}", e)),
+    }
+}
+
+pub fn handel_add_task(task: Task) -> Result<(), String> {
+    match validate_args(&task) {
+        Ok(_) => {
+            let mut task = task;
+            save_task(&mut task).map_err(|e| format_string_with_color(e.as_str(), Color::Red))?;
             Ok(())
         }
         Err(e) => Err(format!("Error: {}", e)),
@@ -25,7 +41,7 @@ pub fn handle_init_db() -> Result<(), String> {
         Err(err) => return Err(err.to_string()),
     };
 
-    match init_db(home_dir) {
+    match repository::init_db(home_dir) {
         Ok(_) => Ok(()),
         Err(err) => Err(err.to_string()),
     }

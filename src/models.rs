@@ -50,6 +50,10 @@ pub struct LSArgs {
     pub limit: usize,
     #[arg(short = 'd', long, default_value_t = 1)]
     pub days: usize,
+    #[arg(short = 'c', long)]
+    pub category: Option<String>,
+    #[arg(short = 'p', long)]
+    pub priority: Option<Priority>,
 }
 
 impl CommandArgs for LSArgs {

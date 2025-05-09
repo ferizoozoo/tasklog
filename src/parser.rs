@@ -1,6 +1,5 @@
 use crate::repository::get_tasks;
 
-use super::handlers::handle_ls;
 use super::models::{format_string_with_color, Cli, Color, CommandArgs, Commands};
 use super::{handlers, models};
 use clap::Parser;
@@ -15,20 +14,14 @@ pub fn execute() {
                 eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
             }
         },
-        Commands::LS(args) => match handle_ls(&args) {
-            Ok(_) => {
-                let tasks = get_tasks(args);
-                println!("{:?}", tasks);
-                ()
-            }
+        Commands::LS(args) => match handlers::handle_ls(&args) {
+            Ok(_) => {}
             Err(err) => {
                 eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
             }
         },
-        Commands::Add(args) => match args.validate() {
-            Ok(_) => {
-                println!("{:?}", args);
-            }
+        Commands::Add(task) => match handlers::handel_add_task(task){
+            Ok(_) => {}
             Err(err) => {
                 eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
             }
