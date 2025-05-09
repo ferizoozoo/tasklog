@@ -48,6 +48,10 @@ const CREATE_POMODORO_TABLE: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_pomodoro_completed ON pomodoro (completed);
 "#;
 
+const GET_TASK_BY_ID: &str = r#"
+    SELECT id, status, title, due_date, priority, category FROM tasks
+        WHERE id = :id"#;
+
 const GET_TASKS: &str = r#"
     SELECT id, status, title, due_date, priority, category FROM tasks
         WHERE due_date <= :due_date {{where_category}} {{where_priority}} {{where_status}}
@@ -58,6 +62,8 @@ const INSERT_TASK: &str = r#"
     INSERT INTO tasks (status, title, due_date, priority, category)
         VALUES (:status, :title, :due_date, :priority, :category)
 "#;
+
+const DONE_TASK: &str = r#"UPDATE tasks SET status = 1 WHERE id = :id"#;
 
 // NOTE: The 'Connection' as Ok value type of Result can become more generic later
 pub fn init_db(home_dir: String) -> Result<(), String> {
@@ -154,20 +160,7 @@ pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
 
     let mut stmt = conn.prepare(query.as_str()).map_err(|err| {err.to_string()})?;
 
-    let tasks_iter = stmt
-        .query_map(params_values.as_slice(), |row| {
-            let date_str: String = row.get::<_,String>(3)?;
-            let due_date:DateTime<Local> = DateTime::parse_from_rfc3339(&date_str).unwrap().with_timezone(&Local);
-
-            Ok(Task {
-                id: row.get(0)?,
-                status: TaskStatus::from_usize(row.get::<_, usize>(1)?),
-                title: row.get(2)?,
-                due_date,
-                priority: Priority::from_usize(row.get::<_, usize>(4)?),
-                category: row.get(5)?,
-            })
-    });
+    let tasks_iter = stmt.query_map(params_values.as_slice(), parse_task);
 
     let tasks_iter = match tasks_iter{
         Ok(val) => val,
@@ -209,6 +202,30 @@ pub fn save_task(task: &mut Task) -> Result<(), String> {
         Ok(_) => {Ok(())}
         Err(err) => Err(err.to_string()),
     }
+}
+
+pub fn get_task_by_id(task_id: usize) -> Result<Task, String> {
+    let conn = match get_connection() {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+     conn.query_row(GET_TASK_BY_ID, params![task_id], parse_task).map_err(|err| err.to_string())
+}
+
+pub fn done_task(task_id: usize) -> Result<(), String> {
+    let conn = match get_connection() {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let rows_affected = conn.execute(DONE_TASK, params![task_id]).map_err(|err| err.to_string())?;
+
+    if rows_affected == 0 {
+        return Err("Could not mark task as done".to_string());
+    };
+    
+    Ok(())
 }
 
 pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
@@ -281,4 +298,18 @@ fn add_pomodoro(pomo_task: PomoTask) -> Result<(), String> {
 
     // Return the ID of the newly inserted task
     Ok(())
+}
+
+
+fn parse_task(row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
+    let date_str: String = row.get::<_,String>(3)?;
+    let due_date:DateTime<Local> = DateTime::parse_from_rfc3339(&date_str).unwrap().with_timezone(&Local);
+    Ok(Task {
+        id: row.get(0)?,
+        status: TaskStatus::from_usize(row.get::<_, usize>(1)?),
+        title: row.get(2)?,
+        due_date,
+        priority: Priority::from_usize(row.get::<_, usize>(4)?),
+        category: row.get(5)?,
+    })
 }

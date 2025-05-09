@@ -22,7 +22,9 @@ pub fn execute() {
         },
         Commands::Analyze(args) => {
         }
-        Commands::Done(args) => {
+        Commands::Done(args) => match handlers::handle_done(args){
+            Ok(_) => {}
+            Err(err) => eprintln!("{}", format_string_with_color(err.as_str(), Color::Red))
         }
         Commands::Pomo(args) => {
         }
