@@ -1,4 +1,5 @@
-use rusqlite::{params, Connection};
+use chrono::{DateTime, TimeDelta, Utc};
+use rusqlite::{params, Connection, ToSql};
 use std::fs;
 
 use crate::{
@@ -8,6 +9,9 @@ use crate::{
 
 const DB_FILE_PATH: &str = "/.tasklog";
 const DB_FILE_NAME: &str = "/db.sqlite";
+
+const SELECT_TASKS_QUERY: &str = "SELECT * FROM tasks";
+const SELECT_POMODORO_QUERY: &str = "SELECT * FROM pomodoro";
 
 pub const CREATE_TASKS_TABLE: &str = r#"
     CREATE TABLE IF NOT EXISTS tasks (
@@ -45,7 +49,6 @@ pub const CREATE_POMODORO_TABLE: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_pomodoro_completed ON pomodoro (completed);
 "#;
 
-// NOTE: The 'Connection' as Ok value type of Result can become more generic later
 pub fn init_db(home_dir: String) -> Result<(), String> {
     let mut path = home_dir + DB_FILE_PATH;
 
@@ -99,18 +102,41 @@ pub fn get_tasks(ls_args: LSArgs) -> Result<Vec<Task>, String> {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
-    let mut stmt = match conn.prepare("SELECT * FROM tasks") {
+
+    let mut query: String = String::from(SELECT_TASKS_QUERY);
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new(); // params should be a list of objects that implement the ToSql trait
+
+    if ls_args.days < 360 {
+        let now = Utc::now();
+        let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        params.push(Box::new(now_str));
+
+        let latest_due_date = Utc::now() + TimeDelta::try_days(ls_args.days as i64).unwrap();
+        let latest_due_date_str = latest_due_date.format("%Y-%m-%d %H:%M:%S").to_string();
+        params.push(Box::new(latest_due_date_str));
+
+        query += " WHERE due_date > ?1 AND due_date < ?2 ";
+    }
+
+    if ls_args.limit < 20 {
+        params.push(Box::new(ls_args.limit));
+        query += "LIMIT ?3";
+    }
+
+    let params_slice: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = match conn.prepare(&query) {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
 
-    let tasks_iter = match stmt.query_map([], |row| {
+    let tasks_iter = match stmt.query_map(params_slice.as_slice(), |row| {
         let date_str: String = row.get(3)?;
         let due_date = parse_date(&date_str).unwrap();
 
         Ok(Task {
             id: row.get(0)?,
-            status: TaskStatus::from(row.get::<_, String>(1)?),
+            status: TaskStatus::from(row.get::<_, usize>(1)?),
             title: row.get(2)?,
             due_date: due_date,
             priority: Priority::from(row.get::<_, usize>(4)?),

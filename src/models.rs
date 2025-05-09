@@ -118,7 +118,7 @@ pub struct Task {
     pub title: String,
     /// Due date (YYYY-MM-DD)
     #[arg(short, long = "due-date", value_parser = parse_date, default_value = "1d")]
-    pub due_date: DateTime<Local>,
+    pub due_date: DateTime<Utc>,
     /// Task priority
     #[arg(short = 'p', long, value_enum, default_value_t = Priority::Medium)]
     pub priority: Priority,
@@ -133,7 +133,7 @@ impl Default for Task {
             id: 0,
             status: TaskStatus::Pending,
             title: String::new(),
-            due_date: Local::now() + Duration::days(1),
+            due_date: Utc::now() + Duration::days(1),
             priority: Priority::Medium,
             category: None,
         }
@@ -280,9 +280,9 @@ pub struct PomoTask {
     #[arg(short = 'c', long)]
     pub category: Option<String>,
     #[clap(skip)]
-    pub start_time: DateTime<Local>,
+    pub start_time: DateTime<Utc>,
     #[clap(skip)]
-    pub end_time: DateTime<Local>,
+    pub end_time: DateTime<Utc>,
 }
 
 impl Default for PomoTask {
@@ -293,8 +293,8 @@ impl Default for PomoTask {
             title: "".to_string(),
             duration: DurationField::default(),
             category: None,
-            start_time: Local::now(),
-            end_time: Local::now() + Duration::minutes(25),
+            start_time: Utc::now(),
+            end_time: Utc::now() + Duration::minutes(25),
         }
     }
 }
@@ -385,14 +385,9 @@ impl From<Priority> for String {
     }
 }
 
-pub fn parse_date(s: &str) -> Result<DateTime<Local>, String> {
-    match NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ") {
-        Ok(naive) => {
-            return Ok(DateTime::<Local>::from_naive_utc_and_offset(
-                naive,
-                Utc.fix(),
-            ))
-        }
+pub fn parse_date(s: &str) -> Result<DateTime<Utc>, String> {
+    match NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        Ok(naive) => return Ok(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)),
         Err(err) => return Err(err.to_string()),
     };
     // let len = s.len();
