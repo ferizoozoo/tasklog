@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use rusqlite::{params, Connection, ToSql, types::Value, named_params};
 use std::fs;
-use chrono::{Datelike, Duration, Local};
+use std::ptr::replace;
+use chrono::{Date, DateTime, Datelike, Duration, Local};
 use crate::{
     helper::get_home_directory,
     models::{parse_date, parse_duration, LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
@@ -49,7 +50,7 @@ const CREATE_POMODORO_TABLE: &str = r#"
 
 const GET_TASKS: &str = r#"
     SELECT id, status, title, due_date, priority, category FROM tasks
-        WHERE due_date >= :due_date {{where_category}} {{where_priority}}
+        WHERE due_date <= :due_date {{where_category}} {{where_priority}} {{where_status}}
         ORDER BY created_at
         DESC limit :limit"#;
 
@@ -93,11 +94,7 @@ pub fn init_db(home_dir: String) -> Result<(), String> {
 fn get_connection() -> Result<Connection, String> {
     let home_dir = match get_home_directory() {
         Ok(val) => val,
-        Err(err) => {
-            return Err(
-                "Could connect to the database, please run the init command again".to_string(),
-            )
-        }
+        Err(err) => return Err("Could connect to the database, please run the init command again".to_string())
     };
 
     let path = home_dir + DB_FILE_PATH + DB_FILE_NAME;
@@ -111,19 +108,13 @@ pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
     let now = Local::now();
     let due_date = now.with_day(now.day()+(ls_args.days as u32)).unwrap().to_rfc3339();
 
-    let p_value:usize;
-    let category_value:String;
-    
-    let mut params_values:Vec<(&str, &dyn ToSql)> = vec![
-        (":due_date", &due_date),
-        (":limit", &ls_args.limit),
-    ];
 
-    let mut query = GET_TASKS.to_owned();
+    let mut query = GET_TASKS.to_string();
+    let mut params_values:Vec<(&str, &dyn ToSql)> = vec![(":due_date", &due_date), (":limit", &ls_args.limit)];
+
+    let p_value:usize;
     match ls_args.priority {
-        None => {
-            query = query.replace("{{where_priority}}", "");
-        },
+        None => query = query.replace("{{where_priority}}", ""),
         Some(p) => {
             query = query.replace("{{where_priority}}", "AND priority = :priority");
             p_value = p as usize;
@@ -131,9 +122,12 @@ pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
         },
     };
 
-    
+
+    let category_value:String;
     let query = match &ls_args.category {
-        None => query.replace("{{where_category}}", ""),
+        None => {
+            query.replace("{{where_category}}", "")
+        },
         Some(category) => {
             category_value = category.clone();
             params_values.push((":category",&category_value));
@@ -141,20 +135,36 @@ pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
         },
     };
 
-
+    let status_value:usize;
+    let query = match &ls_args.status {
+        None => {
+            query.replace("{{where_status}}", "AND status = 0")
+        },
+        Some(status) => {
+            match status {
+                TaskStatus::Done | TaskStatus::Open => {
+                    status_value = status.to_usize();
+                    params_values.push((":status", &status_value));
+                    query.replace("{{where_status}}", "AND status = :status")
+                },
+                _ => query.replace("{{where_status}}", ""),
+            }
+        }
+    };
 
     let mut stmt = conn.prepare(query.as_str()).map_err(|err| {err.to_string()})?;
 
     let tasks_iter = stmt
         .query_map(params_values.as_slice(), |row| {
-            let date_str: String = row.get(3)?;
-            let due_date = parse_date(&date_str).unwrap();
+            let date_str: String = row.get::<_,String>(3)?;
+            let due_date:DateTime<Local> = DateTime::parse_from_rfc3339(&date_str).unwrap().with_timezone(&Local);
+
             Ok(Task {
                 id: row.get(0)?,
-                status: TaskStatus::from(row.get::<_, usize>(1)?),
+                status: TaskStatus::from_usize(row.get::<_, usize>(1)?),
                 title: row.get(2)?,
                 due_date,
-                priority: Priority::from(row.get::<_, usize>(4)?),
+                priority: Priority::from_usize(row.get::<_, usize>(4)?),
                 category: row.get(5)?,
             })
     });
@@ -182,19 +192,21 @@ pub fn save_task(task: &mut Task) -> Result<(), String> {
     let mut stmt= conn.prepare(INSERT_TASK)
         .map_err(|err| err.to_string())?;
 
+    println!("{:?}", task);
+
+    let status = task.status as usize;
+    println!("status as usize: {}", status);
+
     let res =  stmt.execute(named_params! {
-        "status": &(task.status as usize),
-        "title": task.title,
-        "due_date": task.due_date.to_rfc3339(),
-        "priority": task.priority as usize,
-        "category": task.category,
+        ":status": status,
+        ":title": task.title,
+        ":due_date": task.due_date.to_rfc3339(),
+        ":priority": task.priority as usize,
+        ":category": task.category,
     });
 
-    match res{
-        Ok(val) => {
-            task.id = val as u64;
-            Ok(())
-        },
+    match res {
+        Ok(_) => {Ok(())}
         Err(err) => Err(err.to_string()),
     }
 }

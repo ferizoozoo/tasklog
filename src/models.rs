@@ -4,7 +4,7 @@ use chrono::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rusqlite::ToSql;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 pub trait CommandArgs {
@@ -54,6 +54,8 @@ pub struct LSArgs {
     pub category: Option<String>,
     #[arg(short = 'p', long)]
     pub priority: Option<Priority>,
+    #[arg(short = 's', aliases = ["o"], value_enum, long)]
+    pub status: Option<TaskStatus>,
 }
 
 impl CommandArgs for LSArgs {
@@ -70,33 +72,17 @@ impl CommandArgs for LSArgs {
 
 #[derive(Debug, ValueEnum, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Default)]
 pub enum TaskStatus {
-    Done,
+    All = 2,
+    Done = 1,
     #[default]
-    Pending,
+    Open = 0,
 }
 impl From<TaskStatus> for String {
     fn from(s: TaskStatus) -> Self {
         match s {
             TaskStatus::Done => "Done".to_string(),
-            TaskStatus::Pending => "Pending".to_string(),
-        }
-    }
-}
-
-impl From<TaskStatus> for usize {
-    fn from(s: TaskStatus) -> Self {
-        match s {
-            TaskStatus::Done => 1,
-            TaskStatus::Pending => 0,
-        }
-    }
-}
-
-impl From<usize> for TaskStatus {
-    fn from(n: usize) -> Self {
-        match n {
-            1 => TaskStatus::Done,
-            _ => TaskStatus::Pending,
+            TaskStatus::Open => "Open".to_string(),
+            TaskStatus::All => "All".to_string(),
         }
     }
 }
@@ -105,7 +91,42 @@ impl From<String> for TaskStatus {
     fn from(s: String) -> Self {
         match s.to_lowercase().as_str() {
             "done" => TaskStatus::Done,
-            _ => TaskStatus::Pending,
+            "open" => TaskStatus::Open,
+            _ => TaskStatus::All,
+        }
+    }
+}
+
+impl TaskStatus {
+    pub fn is_done(&self) -> bool {
+        *self == TaskStatus::Done
+    }
+
+    pub fn is_pending(&self) -> bool {
+        *self == TaskStatus::Open
+    }
+
+    pub fn from_bool(b: bool) -> TaskStatus {
+        if b {
+            TaskStatus::Done
+        } else {
+            TaskStatus::Open
+        }
+    }
+
+    pub fn from_usize(n: usize) -> TaskStatus {
+        match n {
+            0 => TaskStatus::Open,
+            1 => TaskStatus::Done,
+            _ => TaskStatus::All,
+        }
+    }
+
+    pub fn to_usize(self) -> usize {
+        match self {
+            TaskStatus::Done => 1,
+            TaskStatus::Open => 0,
+            TaskStatus::All => 2,
         }
     }
 }
@@ -135,7 +156,7 @@ impl Default for Task {
     fn default() -> Self {
         Task {
             id: 0,
-            status: TaskStatus::Pending,
+            status: TaskStatus::Open,
             title: String::new(),
             due_date: Local::now() + Duration::days(1),
             priority: Priority::Medium,
@@ -337,10 +358,10 @@ impl CommandArgs for PomoLogsArgs {
 }
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum Priority {
-    Low,
-    Medium,
-    High,
-    Urgent,
+    Low = 1,
+    Medium = 2,
+    High = 3,
+    Urgent = 4,
 }
 
 impl From<String> for Priority {
@@ -351,29 +372,6 @@ impl From<String> for Priority {
             "high" => Priority::High,
             "urgent" => Priority::Urgent,
             _ => Priority::Medium,
-        }
-    }
-}
-
-impl From<usize> for Priority {
-    fn from(n: usize) -> Self {
-        match n {
-            1 => Priority::Low,
-            2 => Priority::Medium,
-            3 => Priority::High,
-            4 => Priority::Urgent,
-            _ => Priority::Medium,
-        }
-    }
-}
-
-impl From<Priority> for usize {
-    fn from(p: Priority) -> Self {
-        match p {
-            Priority::Low => 1,
-            Priority::Medium => 2,
-            Priority::High => 3,
-            Priority::Urgent => 4,
         }
     }
 }
@@ -389,52 +387,73 @@ impl From<Priority> for String {
     }
 }
 
-pub fn parse_date(s: &str) -> Result<DateTime<Local>, String> {
-    match NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ") {
-        Ok(naive) => {
-            return Ok(DateTime::<Local>::from_naive_utc_and_offset(
-                naive,
-                Utc.fix(),
-            ))
+impl Priority {
+    pub fn from_usize(n: usize) -> Priority {
+        match n {
+            1 => Priority::Low,
+            2 => Priority::Medium,
+            3 => Priority::High,
+            4 => Priority::Urgent,
+            _ => Priority::Medium,
         }
-        Err(err) => return Err(err.to_string()),
-    };
-    // let len = s.len();
-    // if len < 2 {
-    //     return Err(
-    //         "argument format must be a number followed by a unit (d, M, y) like 10d for 10 days"
-    //             .to_string(),
-    //     );
-    // }
+    }
 
-    // let (value_str, unit) = s.split_at(len - 1);
-    // let value: u32 = value_str
-    //     .parse()
-    //     .map_err(|_| format!("Cannot parse '{}' as a number", value_str))?;
+    pub fn to_usize(&self) -> usize {
+        match self {
+            Priority::Low => 1,
+            Priority::Medium => 2,
+            Priority::High => 3,
+            Priority::Urgent => 4,
+        }
+    }
+}
 
-    // match unit {
-    //     "d" => Ok(Local::now() + Duration::days(value as i64)),
-    //     "m" => {
-    //         let date = Local::now();
-    //         match date.with_month(date.month() + value) {
-    //             Some(d) => Ok(d),
-    //             None => Err(format!("could not parse date {}", s)),
-    //         }
-    //     }
-    //     "y" => {
-    //         let date = Local::now();
-    //         match date.with_year(date.year() + (value as i32)) {
-    //             Some(d) => Ok(d),
-    //             None => Err(format!("could not parse date {}", s)),
-    //         }
-    //     }
-    //     _ => Err(format!("Unknown duration unit: {}", unit)),
-    // }
+impl Display for Priority {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Priority::Low => write!(f, "Low"),
+            Priority::Medium => write!(f, "Medium"),
+            Priority::High => write!(f, "High"),
+            Priority::Urgent => write!(f, "Urgent"),
+        }
+    }
+}
+
+pub fn parse_date(s: &str) -> Result<DateTime<Local>, String> {
+    let len = s.len();
+    if len < 2 {
+        return Err(
+            "argument format must be a number followed by a unit (d, M, y) like 10d for 10 days"
+                .to_string(),
+        );
+    }
+
+    let (value_str, unit) = s.split_at(len - 1);
+    let value: u32 = value_str
+        .parse()
+        .map_err(|_| format!("Cannot parse '{}' as a number", value_str))?;
+
+    match unit {
+        "d" => Ok(Local::now() + Duration::days(value as i64)),
+        "m" => {
+            let date = Local::now();
+            match date.with_month(date.month() + value) {
+                Some(d) => Ok(d),
+                None => Err(format!("could not parse date {}", s)),
+            }
+        }
+        "y" => {
+            let date = Local::now();
+            match date.with_year(date.year() + (value as i32)) {
+                Some(d) => Ok(d),
+                None => Err(format!("could not parse date {}", s)),
+            }
+        }
+        _ => Err(format!("Unknown duration unit: {}", unit)),
+    }
 }
 
 pub fn parse_duration(duration_str: &str) -> Result<DurationField, String> {
-    // This is just a placeholder for actual duration parsing
-    // In a real implementation, you'd validate and parse the duration here
     DurationField::from_str(duration_str)
 }
 
