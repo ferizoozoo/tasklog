@@ -1,7 +1,12 @@
-use crate::models::{CommandArgs, LSArgs};
+use crate::{
+    helper::get_home_directory,
+    models::{CommandArgs, LSArgs},
+    repository::init_db,
+};
+use std::env;
 
-pub fn handle_ls(args: LSArgs) -> Result<(), String> {
-    match validate_args(&args) {
+pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
+    match validate_args(args) {
         Ok(_) => {
             println!("inside handler {:?}", args);
             Ok(())
@@ -15,10 +20,13 @@ fn validate_args<T: CommandArgs>(args: &T) -> Result<(), String> {
 }
 
 pub fn handle_init_db() -> Result<(), String> {
-    // Initialize the database
-    // This is a placeholder for the actual database initialization logic
+    let home_dir = match get_home_directory() {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
 
-    // Run the Scehma models
-
-    Ok(())
+    match init_db(home_dir) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
 }

@@ -1,6 +1,8 @@
-use super::models::{format_string_with_color, Cli, Color, CommandArgs, Commands};
-use super::{models, handlers};
+use crate::repository::get_tasks;
+
 use super::handlers::handle_ls;
+use super::models::{format_string_with_color, Cli, Color, CommandArgs, Commands};
+use super::{handlers, models};
 use clap::Parser;
 
 pub fn execute() {
@@ -13,23 +15,24 @@ pub fn execute() {
                 eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
             }
         },
-        Commands::LS(args) => match handle_ls(args) {
-            Ok(_) => {}
+        Commands::LS(args) => match handle_ls(&args) {
+            Ok(_) => {
+                let tasks = get_tasks(args);
+                println!("{:?}", tasks);
+                ()
+            }
             Err(err) => {
                 eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
             }
         },
-        Commands::Add(args) => {
-            match args.validate() {
-                Ok(_) => {
-                    println!("{:?}", args);
-                }
-                Err(err) => {
-                    eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
-                }
+        Commands::Add(args) => match args.validate() {
+            Ok(_) => {
+                println!("{:?}", args);
             }
-
-        }
+            Err(err) => {
+                eprintln!("{}", format_string_with_color(err.as_str(), Color::Red));
+            }
+        },
         Commands::Analyze(args) => {
             println!("Analyzing tasks");
             println!("Since: {}", args.days);
@@ -40,6 +43,6 @@ pub fn execute() {
         Commands::Pomo(args) => {
             println!("Starting pomo");
             println!("{:?}", args);
-        },
+        }
     }
 }

@@ -1,8 +1,11 @@
-use chrono::{Date, DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, TimeZone};
+use chrono::{
+    Date, DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset,
+    TimeZone, Utc,
+};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use rusqlite::ToSql;
 use std::fmt::Debug;
 use std::str::FromStr;
-
 
 pub trait CommandArgs {
     fn validate(&self) -> Result<(), String>;
@@ -161,11 +164,11 @@ pub struct AnalyzeArgs {
 impl CommandArgs for AnalyzeArgs {
     fn validate(&self) -> Result<(), String> {
         let today = Local::now();
-        if let Some(next_year) = today.with_year(today.year() + 1){
+        if let Some(next_year) = today.with_year(today.year() + 1) {
             if self.days > next_year {
                 return Err("Days cannot be greater than 365".to_string());
             };
-        }else {
+        } else {
             return Err("Days cannot be greater than 365".to_string());
         }
 
@@ -224,13 +227,15 @@ impl FromStr for DurationField {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let len = s.len();
         if len < 2 {
-            return Err("Duration format must be a number followed by a unit (s, m, h)".to_string());
+            return Err(
+                "Duration format must be a number followed by a unit (s, m, h)".to_string(),
+            );
         }
 
         let (value_str, unit) = s.split_at(len - 1);
-        let value: i64 = value_str.parse().map_err(|_| {
-            format!("Cannot parse '{}' as a number", value_str)
-        })?;
+        let value: i64 = value_str
+            .parse()
+            .map_err(|_| format!("Cannot parse '{}' as a number", value_str))?;
 
         match unit {
             "s" => Ok(DurationField(chrono::Duration::seconds(value))),
@@ -258,7 +263,6 @@ impl Default for DurationField {
         DurationField(chrono::Duration::minutes(25))
     }
 }
-
 
 #[derive(Args, Debug)]
 pub struct PomoTask {
@@ -290,7 +294,7 @@ impl Default for PomoTask {
             duration: DurationField::default(),
             category: None,
             start_time: Local::now(),
-            end_time: Local::now()+Duration::minutes(25),
+            end_time: Local::now() + Duration::minutes(25),
         }
     }
 }
@@ -301,7 +305,6 @@ impl CommandArgs for PomoTask {
             return Err("Duration cannot be 0".to_string());
         }
 
-
         if self.title.trim().is_empty() {
             return Err("Title cannot be empty".to_string());
         }
@@ -309,7 +312,6 @@ impl CommandArgs for PomoTask {
         Ok(())
     }
 }
-
 
 #[derive(Args, Debug)]
 pub struct PomoLogsArgs {
@@ -384,34 +386,46 @@ impl From<Priority> for String {
 }
 
 pub fn parse_date(s: &str) -> Result<DateTime<Local>, String> {
-    let len = s.len();
-    if len < 2 {
-        return Err("argument format must be a number followed by a unit (d, M, y) like 10d for 10 days".to_string());
-    }
+    match NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ") {
+        Ok(naive) => {
+            return Ok(DateTime::<Local>::from_naive_utc_and_offset(
+                naive,
+                Utc.fix(),
+            ))
+        }
+        Err(err) => return Err(err.to_string()),
+    };
+    // let len = s.len();
+    // if len < 2 {
+    //     return Err(
+    //         "argument format must be a number followed by a unit (d, M, y) like 10d for 10 days"
+    //             .to_string(),
+    //     );
+    // }
 
-    let (value_str, unit) = s.split_at(len - 1);
-    let value: u32 = value_str.parse().map_err(|_| {
-        format!("Cannot parse '{}' as a number", value_str)
-    })?;
+    // let (value_str, unit) = s.split_at(len - 1);
+    // let value: u32 = value_str
+    //     .parse()
+    //     .map_err(|_| format!("Cannot parse '{}' as a number", value_str))?;
 
-    match unit {
-        "d" => Ok(Local::now() + Duration::days(value as i64)),
-        "m" => {
-            let  date = Local::now();
-            match date.with_month(date.month() + value){
-                Some(d) => Ok(d),
-                None => Err(format!("could not parse date {}", s))
-            }
-        },
-        "y" => {
-            let date = Local::now();
-            match date.with_year(date.year() + (value as i32)){
-                Some(d) => Ok(d),
-                None => Err(format!("could not parse date {}", s))
-            }
-        },
-        _ => Err(format!("Unknown duration unit: {}", unit)),
-    }
+    // match unit {
+    //     "d" => Ok(Local::now() + Duration::days(value as i64)),
+    //     "m" => {
+    //         let date = Local::now();
+    //         match date.with_month(date.month() + value) {
+    //             Some(d) => Ok(d),
+    //             None => Err(format!("could not parse date {}", s)),
+    //         }
+    //     }
+    //     "y" => {
+    //         let date = Local::now();
+    //         match date.with_year(date.year() + (value as i32)) {
+    //             Some(d) => Ok(d),
+    //             None => Err(format!("could not parse date {}", s)),
+    //         }
+    //     }
+    //     _ => Err(format!("Unknown duration unit: {}", unit)),
+    // }
 }
 
 pub fn parse_duration(duration_str: &str) -> Result<DurationField, String> {
