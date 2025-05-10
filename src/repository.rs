@@ -59,11 +59,19 @@ const GET_TASKS: &str = r#"
         DESC limit :limit"#;
 
 const INSERT_TASK: &str = r#"
-    INSERT INTO tasks (status, title, due_date, priority, category)
-        VALUES (:status, :title, :due_date, :priority, :category)
+    INSERT INTO tasks (status, title, due_date, pomo_type, category)
+        VALUES (:status, :title, :due_date, :pomo_type, :category)
 "#;
 
 const DONE_TASK: &str = r#"UPDATE tasks SET status = 1 WHERE id = :id"#;
+
+const INSERT_POMO: &str = r#"
+"INSERT INTO
+    pomodoro (pomo_type, title, start_time, end_time, duration, completed, category)
+    VALUES (:pomo_type, :title, :start_time, :end_time, :duration, :completed, :category)
+    RETURNING id
+"#;
+
 
 // NOTE: The 'Connection' as Ok value type of Result can become more generic later
 pub fn init_db(home_dir: String) -> Result<(), String> {
@@ -250,9 +258,9 @@ pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
 
         Ok(PomoTask {
             id: row.get(0)?,
-            pomo_type: PomoType::from(row.get::<_, usize>(1)?),
+            pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
             title: row.get(2)?,
-            duration: duration,
+            duration,
             category: row.get(4)?,
             start_time: start_date,
             end_time: end_date,
@@ -271,32 +279,41 @@ pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
     Ok(pomo_tasks)
 }
 
-fn add_pomodoro(pomo_task: PomoTask) -> Result<(), String> {
+pub fn add_pomodoro(pomo_task: &mut PomoTask) -> Result<(), String> {
     let conn = match get_connection() {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
-    // conn.execute(
-    //     r#"INSERT INTO pomodoro (pomo_type, title, start_time, end_time,
-    //             duration, completed, category, created_at, updated_at)
-    //      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
-    //     params![
-    //         pomo_task.pomo_type as usize,
-    //         pomo_task.title,
-    //         pomo_task.start_time.to_rfc3339(),
-    //         pomo_task.end_time.to_rfc3339(),
-    //         pomo_task.duration,
-    //         pomo_task.completed,
-    //         pomo_task.category,
-    //         pomo_task.created_at,
-    //         pomo_task.updated_at,
-    //     ],
-    // )
-    // .map_err(|err| {
-    //     return err.to_string();
-    // });
 
-    // Return the ID of the newly inserted task
+    let mut stmt = conn.prepare(INSERT_POMO)
+        .map_err(|_| "could not establish connection".to_string())?;
+
+    let start_time = Local::now();
+    let end_time = pomo_task.duration.add_date(&start_time);
+
+    let res = stmt.query_row(
+        named_params! {
+            ":pomo_type": pomo_task.pomo_type.to_usize(),
+            ":title": pomo_task.title,
+            ":category": pomo_task.category,
+            ":duration": pomo_task.duration.to_i64(),
+            ":start_time": start_time.to_rfc3339(),
+            ":end_time": end_time.to_rfc3339(),
+            ":completed": 0,
+
+        },
+        |row| Ok(row.get::<_,u64>(0)),
+    );
+
+    let id= match res {
+        Ok(val) => val.unwrap(),
+        Err(err) => return Err(err.to_string()),
+    };
+
+    pomo_task.id = id;
+    pomo_task.start_time = start_time;
+    pomo_task.end_time = end_time;
+
     Ok(())
 }
 

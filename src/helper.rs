@@ -1,5 +1,6 @@
 use std::env;
-use crate::models::{format_string_with_color, Color, CommandArgs, Task};
+use clap::builder::Str;
+use crate::models::{format_string_with_color, Color, CommandArgs, PomoTask, Task};
 
 pub fn get_home_directory() -> Result<String, String> {
     if let Ok(path) = env::var("HOME") {
@@ -18,15 +19,9 @@ pub fn get_home_directory() -> Result<String, String> {
 }
 
 
-pub fn validate_args<T: CommandArgs>(args: &T) -> Result<(), String> {
-    args.validate()
-}
-
-
-pub fn print_tasks_table(tasks: &Vec<Task>) {
+pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(),String> {
     if tasks.is_empty() {
-        eprintln!("{}",format_string_with_color("NOT_FOUND", Color::Red));
-        return;
+        return Err(format_string_with_color("NOT_FOUND", Color::Red));
     }
 
     // Define the column headers
@@ -102,4 +97,15 @@ pub fn print_tasks_table(tasks: &Vec<Task>) {
 
         println!();
     }
+
+    Ok(())
 }
+
+
+pub fn print_count_down_screen(p: &PomoTask) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn clear_terminal_screen() -> Result<(), String> {
+    Ok(())
+} 

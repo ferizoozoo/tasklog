@@ -201,11 +201,11 @@ impl CommandArgs for AnalyzeArgs {
     }
 }
 
-#[derive(Default, Debug, ValueEnum, Copy, Clone)]
+#[derive(Default, Debug, ValueEnum,Copy, Clone)]
 pub enum PomoType {
-    Rest,
+    Rest = 1,
     #[default]
-    Work,
+    Work = 0,
 }
 
 impl From<String> for PomoType {
@@ -213,24 +213,6 @@ impl From<String> for PomoType {
         match s.to_lowercase().as_str() {
             "rest" => PomoType::Rest,
             _ => PomoType::Work,
-        }
-    }
-}
-
-impl From<usize> for PomoType {
-    fn from(n: usize) -> Self {
-        match n {
-            1 => PomoType::Rest,
-            _ => PomoType::Work,
-        }
-    }
-}
-
-impl From<PomoType> for usize {
-    fn from(p: PomoType) -> Self {
-        match p {
-            PomoType::Rest => 1,
-            PomoType::Work => 2,
         }
     }
 }
@@ -243,6 +225,37 @@ impl From<PomoType> for String {
         }
     }
 }
+
+impl PomoType {
+    pub fn from_usize(n: usize) -> PomoType {
+        match n {
+            0 => PomoType::Work,
+            _ => PomoType::Rest,
+        }
+    }
+
+    pub fn to_usize(&self) -> usize {
+        match self {
+            PomoType::Rest => 0,
+            PomoType::Work => 1,
+        }
+    }
+
+    pub fn is_rest(&self) -> bool {
+        match *self {
+            PomoType::Rest => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_work(&self) -> bool {
+        match *self {
+            PomoType::Work => true,
+            _ => false,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct DurationField(chrono::Duration);
@@ -268,6 +281,20 @@ impl FromStr for DurationField {
             "h" => Ok(DurationField(chrono::Duration::hours(value))),
             _ => Err(format!("Unknown duration unit: {}", unit)),
         }
+    }
+}
+
+impl DurationField {
+    pub fn to_i64(&self) -> i64 {
+        self.0.num_seconds()
+    }
+
+    pub fn from_i64(n: i64) -> Self {
+        DurationField(chrono::Duration::seconds(n))
+    }
+
+    pub fn add_date(&self, date: &DateTime<Local>) -> DateTime<Local> {
+        *date + self.0
     }
 }
 
