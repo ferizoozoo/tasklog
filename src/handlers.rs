@@ -1,136 +1,193 @@
-use std::process::exit;
-use crate::{
-    helper::get_home_directory,
-    models::{CommandArgs, LSArgs, Task,format_string_with_color, Color},
-    repository,
-};
-use crate::repository::save_task;
+use std::io::stdout;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+use chrono::Local;
+use crossterm::{execute, terminal};
+use crate::{handlers, helper::{self, get_home_directory}, models::{format_string_with_color, Color, DoneArgs, LSArgs, PomoTask, Task, TaskStatus}, repository};
+use crate::helper::{draw_ui, run_event_thread, run_timer_thread};
+use crate::models::{AnalyzeArgs, CommandArgs, PomodoroEvent, AppState, PomoStatus};
+use crossterm::cursor;
+
 
 pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
-    match validate_args(args) {
-        Ok(_) => {
-            match repository::get_tasks(args) {
-                Ok(t)  => {
-                    print_tasks_table(&t);
-                    Ok(())
-                },
-                Err(e) => Err(format_string_with_color(e.as_str(), Color::Red)),
-            }
-        }
-        Err(e) => Err(format!("Error: {}", e)),
-    }
+    args.validate().map_err(|e| format!("Err: {}", e))?;
+
+    let t =  repository::get_tasks(args)
+        .map_err(|e| format_string_with_color(e.as_str(), Color::Red))?;
+
+    helper::print_tasks_table(&t)
 }
 
 pub fn handel_add_task(task: Task) -> Result<(), String> {
-    match validate_args(&task) {
-        Ok(_) => {
-            let mut task = task;
-            println!("Adding task: {:?}", task);
-            save_task(&mut task).map_err(|e| format_string_with_color(format!("Error: {}",e).as_str(), Color::Red))?;
+    task.validate().map_err(|e| format!("Err: {}", e))?;
 
-            println!("Task added successfully");
-            print_tasks_table(&vec![task]);
-            Ok(())
-        }
-        Err(e) => Err(format!("Error: {}", e)),
-    }
-}
+    let mut task = task;
 
-fn validate_args<T: CommandArgs>(args: &T) -> Result<(), String> {
-    args.validate()
+    repository::save_task(&mut task).map_err(|e| {
+        format_string_with_color(format!("Error: {}", e).as_str(), Color::Red)
+    })?;
+
+    helper::print_tasks_table(&vec![task])
 }
 
 pub fn handle_init_db() -> Result<(), String> {
-    let home_dir = match get_home_directory() {
-        Ok(val) => val,
-        Err(err) => return Err(err.to_string()),
-    };
+    let home_dir = get_home_directory()?;
 
-    match repository::init_db(home_dir) {
-        Ok(_) => Ok(()),
-        Err(err) => Err(err.to_string()),
-    }
+    repository::init_db(home_dir)
 }
 
+pub fn handle_analyze(analyze_args: AnalyzeArgs) -> Result<(), String>{
+    Err("Not implemented yet".to_string())
+}
+
+pub fn handle_done(done_args: DoneArgs) -> Result<(), String> {
+    let task = repository::get_task_by_id(done_args.id)?;
+
+    if task.status == TaskStatus::Done {
+        return Err("Task is already done".to_string());
+    };
+
+    repository::done_task(done_args.id).map_err(|e| format!("Error: {}", e))?;
+
+    println!("{}\n\n",format_string_with_color("marked task as done", Color::Green));
+
+    helper::print_tasks_table(&vec![task])
+}
+
+pub fn handle_pomodoro(pomo_task: PomoTask) -> Result<(), String> {
+    pomo_task.validate()?;
+
+    let mut pomo_value = pomo_task;
+    repository::add_pomodoro(&mut pomo_value)?;
 
 
-fn print_tasks_table(tasks: &Vec<Task>) {
-    if tasks.is_empty() {
-        eprintln!("{}",format_string_with_color("NOT_FOUND", Color::Red));
-       return;
+    helper::clear_terminal_screen()?;
+
+    control_terminal(&mut pomo_value)
+}
+
+pub fn control_terminal(pomo_task: &mut PomoTask) -> Result<(), String> {
+    let mut stdout = stdout();
+
+    // --- Setup Terminal ---
+    terminal::enable_raw_mode()
+        .map_err(|e| e.to_string())?;
+    // Enter alternate screen to keep main terminal clean. Hide cursor.
+    execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)
+        .map_err(|e| e.to_string())?;
+
+    let initial_duration = pomo_task.duration.to_time_duration();
+
+    let (term_width, term_height) = terminal::size()
+        .map_err(|e| e.to_string())?;
+
+    let mut app_state = AppState {
+        title: pomo_task.title.clone(),
+        term_width,
+        term_height,
+        current_time: initial_duration,
+        quited: false,
+    };
+
+    let (time_update_tx, time_update_rx) = mpsc::channel::<Duration>();
+    let (event_tx, event_rx) = mpsc::channel::<PomodoroEvent>();
+
+    let (timer_quit_tx, timer_quit_rx) = mpsc::channel::<()>();
+    let (event_thread_quit_tx, event_thread_quit_rx) = mpsc::channel::<()>();
+
+    let timer_handle = {
+        let time_update_tx_clone = time_update_tx.clone();
+        thread::spawn(move || {
+            run_timer_thread(initial_duration, time_update_tx_clone, timer_quit_rx);
+        })
+    };
+
+    let event_handle = {
+        let event_tx_clone = event_tx.clone();
+        thread::spawn(move || {
+            run_event_thread(event_tx_clone, event_thread_quit_rx);
+        })
+    };
+
+    draw_ui(&mut stdout, &app_state).map_err(|e| e.to_string())?;
+
+    loop {
+        // Process incoming messages non-blockingly.
+        // Order of checking: events first, then time updates.
+
+        // Check for application events (Resize, Quit)
+        match event_rx.try_recv() {
+            Ok(PomodoroEvent::Quit) => {
+                app_state.quited = true;
+                break; // Exit main loop.
+            }
+            Ok(PomodoroEvent::Resize(new_width, new_height)) => {
+                println!("Resizing to {}x{}", new_width, new_height);
+                app_state.term_width = new_width;
+                app_state.term_height = new_height;
+                draw_ui(&mut stdout, &app_state)?;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                // No event, continue.
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // Event thread terminated, should also quit.
+                app_state.quited = true;
+                break;
+            }
+        }
+
+        // Check for time updates from the timer thread.
+        match time_update_rx.try_recv() {
+            Ok(new_time) => {
+                app_state.current_time = new_time;
+                draw_ui(&mut stdout, &app_state)?;
+                if app_state.current_time == Duration::ZERO {
+                    // Optional: Display "Time's up!" message here before breaking.
+                    // For now, just break the loop.
+                    break;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                // No time update, continue.
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // Timer thread terminated. If not due to time up, this might be an issue.
+                // If time is already zero, this is expected.
+                if app_state.current_time != Duration::ZERO {
+                    // Timer thread died unexpectedly.
+                }
+                break;
+            }
+        }
+
+        // Small sleep to prevent main loop from busy-waiting excessively.
+        // This also determines the responsiveness to channel messages.
+        thread::sleep(Duration::from_millis(50));
     }
 
-    // Define the column headers
-    let headers = ["id", "title", "status", "due_date", "priority", "category"];
+    let _ = timer_quit_tx.send(());
+    let _ = event_thread_quit_tx.send(());
 
-    // Calculate the width of each column based on content
-    let mut col_widths = vec![
-        headers[0].len(),  // id
-        headers[1].len(),  // title
-        headers[2].len(),  // status
-        headers[3].len(),  // due_date
-        headers[4].len(),  // priority
-        headers[5].len(),  // category
-    ];
+    // Wait for threads to finish (optional but good practice).
+    let _ = timer_handle.join();
+    let _ = event_handle.join();
 
-    // Update the column widths based on the task data
-    for task in tasks {
-        // ID column width
-        col_widths[0] = col_widths[0].max(task.id.to_string().len());
+    // Restore terminal: Leave alternate screen, show cursor.
+    execute!(stdout, terminal::LeaveAlternateScreen, cursor::Show)
+        .map_err(|e| e.to_string())?;
 
-        // Title column width
-        col_widths[1] = col_widths[1].max(task.title.len());
+    terminal::disable_raw_mode()
+        .map_err(|e| e.to_string())?;
 
-        // Status column width
-        col_widths[2] = col_widths[2].max(format!("{:?}", task.status).len());
+    pomo_task.end_time = Local::now();
 
-        // Due date column width
-        col_widths[3] = col_widths[3].max(task.due_date.format("%Y-%m-%d").to_string().len());
-
-        // Priority column width
-        col_widths[4] = col_widths[4].max(format!("{:?}", task.priority).len());
-
-        // Category column width
-        let category_str = task.category.as_ref().map_or("", |s| s.as_str());
-        col_widths[5] = col_widths[5].max(category_str.len());
+    if app_state.quited {
+        pomo_task.status = PomoStatus::Paused;
+    }else {
+        pomo_task.status = PomoStatus::Finished
     }
 
-    // Print header row with proper padding
-    print!("| ");
-    for (i, header) in headers.iter().enumerate() {
-        print!("{:<width$} | ", header, width = col_widths[i]);
-    }
-    println!();
-
-    // Print separator row
-    print!("|");
-    for width in &col_widths {
-        print!("-{}-|", "-".repeat(*width));
-    }
-    println!();
-
-    // Print each task row
-    for task in tasks {
-        print!("| ");
-        // ID column
-        print!("{:<width$} | ", task.id, width = col_widths[0]);
-
-        // Title column
-        print!("{:<width$} | ", task.title, width = col_widths[1]);
-
-        // Status column
-        print!("{:<width$} | ", format!("{:?}", task.status), width = col_widths[2]);
-
-        // Due date column
-        print!("{:<width$} | ", task.due_date.format("%Y-%m-%d"), width = col_widths[3]);
-
-        // Priority column
-        print!("{:<width$} | ", format!("{:?}", task.priority), width = col_widths[4]);
-
-        // Category column
-        let category_str = task.category.as_ref().map_or("", |s| s.as_str());
-        print!("{:<width$} | ", category_str, width = col_widths[5]);
-
-        println!();
-    }
+    repository::update_pomodoro(pomo_task)
 }
