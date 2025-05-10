@@ -1,6 +1,21 @@
 use std::env;
-use clap::builder::Str;
-use crate::models::{format_string_with_color, Color, CommandArgs, PomoTask, Task};
+use crate::models::{format_string_with_color, Color, Task, AppState, PomodoroEvent, PomoTask};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute, queue, style::Print,
+    terminal::{self, ClearType, Clear},
+};
+use std::{
+    io::{stdout, Stdout, Write},
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+    time::Duration,
+};
+use crate::handlers;
+
+const BOX_WIDTH:u16=40;
+const BOX_HEIGHT:u16 = 4;
 
 pub fn get_home_directory() -> Result<String, String> {
     if let Ok(path) = env::var("HOME") {
@@ -102,10 +117,175 @@ pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(),String> {
 }
 
 
-pub fn print_count_down_screen(p: &PomoTask) -> Result<(), String> {
-    Ok(())
+fn format_time(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    format!("{:02}:{:02}", minutes, seconds)
 }
 
+fn center_text(text: &str, width: usize) -> String {
+    let padding = if text.len() < width {
+        (width - text.len()) / 2
+    } else {
+        0
+    };
+
+    format!("{}{}", " ".repeat(padding), text)
+}
+
+
+
 pub fn clear_terminal_screen() -> Result<(), String> {
-    Ok(())
-} 
+    let mut stout = std::io::stdout();
+    let res = execute!(
+        stout,
+        Clear(ClearType::All),
+        cursor::MoveTo(0,0),
+    );
+
+    match res {
+        Ok(_) => Ok(()),
+        Err(e) =>  Err(e.to_string()),
+    }
+}
+
+
+pub fn draw_ui(stdout: &mut Stdout, state: &AppState) -> Result<(), String> {
+    queue!(stdout, terminal::Clear(ClearType::All)).map_err(|e| e.to_string())?;
+
+    let box_start_col = if state.term_width >= BOX_WIDTH {
+        (state.term_width - BOX_WIDTH) / 2
+    } else {
+        0
+    };
+
+    let box_start_row = if state.term_height >= BOX_HEIGHT {
+        (state.term_height - BOX_HEIGHT) / 2
+    } else {
+        0
+    };
+
+    let content_inner_width = (BOX_WIDTH.saturating_sub(2)) as usize;
+
+    let total_seconds = state.current_time.as_secs();
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    let time_str = format!("{:02}:{:02}", minutes, seconds);
+
+    let border_line = "-".repeat(BOX_WIDTH as usize);
+
+    let title_to_display = if state.title.chars().count() > content_inner_width {
+        state.title.chars().take(content_inner_width).collect::<String>()
+    } else {
+        state.title.to_string()
+    };
+
+    let mut title_padded = format!("{:^width$}", title_to_display, width = content_inner_width);
+    title_padded = format_string_with_color(title_padded.as_str(), Color::Cyan);
+    let title_line_content = format!("|{}|", title_padded);
+
+    let mut time_padded = format!("{:^width$}", time_str, width = content_inner_width);
+    time_padded = format_string_with_color(time_padded.as_str(), Color::Yellow);
+    
+    let time_line_content = format!("|{}|", time_padded);
+
+
+    let res = queue!(
+        stdout,
+        cursor::MoveTo(box_start_col, box_start_row),
+        Print(&border_line),
+        cursor::MoveTo(box_start_col, box_start_row + 1),
+        Print(&title_line_content),
+        cursor::MoveTo(box_start_col, box_start_row + 2),
+        Print(&time_line_content),
+        cursor::MoveTo(box_start_col, box_start_row + 3),
+        Print(&border_line)
+    );
+
+    match res {
+        Ok(_) => stdout.flush().map_err(|e| e.to_string()),
+        Err(e) =>  Err(e.to_string()),
+    }
+}
+
+pub fn run_timer_thread(
+    initial_duration: Duration,
+    time_update_tx: Sender<Duration>,
+    quit_rx: Receiver<()>,
+) {
+    let mut current_duration = initial_duration;
+    loop {
+        // Check for quit signal non-blockingly.
+        if quit_rx.try_recv().is_ok() {
+            break; // Exit if quit signal received.
+        }
+
+        // Send the current time to the main thread.
+        if time_update_tx.send(current_duration).is_err() {
+            break; // Main thread likely terminated.
+        }
+
+        // Stop if countdown reaches zero.
+        if current_duration == Duration::ZERO {
+            break;
+        }
+
+        // Wait for one second.
+        // To make the quit signal check more responsive, sleep in smaller intervals.
+        for _ in 0..10 { // Sleep for 10 * 100ms = 1 second
+            if quit_rx.try_recv().is_ok() {
+                return; // Exit immediately if quit signal received during sleep.
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        current_duration = current_duration.saturating_sub(Duration::from_secs(1));
+    }
+}
+
+pub fn run_event_thread(event_tx: Sender<PomodoroEvent>, quit_rx: Receiver<()>) {
+    loop {
+        // Check for quit signal non-blockingly.
+        if quit_rx.try_recv().is_ok() {
+            break; // Exit if quit signal received.
+        }
+
+        // Poll for terminal events with a timeout.
+        if event::poll(Duration::from_millis(200)).unwrap_or(false) {
+            match event::read() {
+                // For killing the app, use the 'q' key or 'ctrl+c'
+                Ok(Event::Key(KeyEvent {
+                                  code: KeyCode::Char('q'), ..
+                              }))
+                | Ok(Event::Key(KeyEvent {
+                                    code: KeyCode::Char('c'),
+                                    modifiers: KeyModifiers::CONTROL, ..
+                                })) => {
+                    if event_tx.send(PomodoroEvent::Quit).is_err() {
+                        break; // Main thread likely terminated.
+                    }
+                    // Once quit is sent, this thread can exit.
+                    break;
+                }
+
+                // For resizing the terminal
+                Ok(Event::Resize(width, height)) => {
+                    if event_tx.send(PomodoroEvent::Resize(width, height)).is_err() {
+                        break; // Main thread likely terminated.
+                    }
+                }
+
+                // any error should kill the event thread
+                Err(_) => {
+                    // Error reading event, could signal this or just break.
+                    let _ = event_tx.send(PomodoroEvent::Quit); // Signal main to quit on error
+                    break;
+                }
+                _ => {} // Ignore other events.
+            }
+        }
+        // No explicit sleep here as event::poll has a timeout.
+    }
+}
+
+

@@ -7,6 +7,7 @@ use crate::{
     helper::get_home_directory,
     models::{parse_date, parse_duration, LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
 };
+use crate::models::PomoStatus;
 use crate::parser::execute;
 
 const DB_FILE_PATH: &str = "/.tasklog";
@@ -32,12 +33,12 @@ const CREATE_TASKS_TABLE: &str = r#"
 const CREATE_POMODORO_TABLE: &str = r#"
     CREATE TABLE IF NOT EXISTS pomodoro (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pomo_type INTEGER NOT NULL DEFAULT 0,
+        type INTEGER NOT NULL DEFAULT 0,
         title TEXT NOT NULL,
         start_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         end_time TIMESTAMP,
         duration INTEGER NOT NULL DEFAULT 1500, -- 25 minutes
-        completed BOOLEAN NOT NULL DEFAULT 0,
+        status INTEGER NOT NULL DEFAULT 0,
         category TEXT,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -45,7 +46,7 @@ const CREATE_POMODORO_TABLE: &str = r#"
 
     CREATE INDEX IF NOT EXISTS idx_pomodoro_pomo_type ON pomodoro (pomo_type);
     CREATE INDEX IF NOT EXISTS idx_pomodoro_category ON pomodoro (category);
-    CREATE INDEX IF NOT EXISTS idx_pomodoro_completed ON pomodoro (completed);
+    CREATE INDEX IF NOT EXISTS idx_pomodoro_quited ON pomodoro (quited);
 "#;
 
 const GET_TASK_BY_ID: &str = r#"
@@ -65,13 +66,26 @@ const INSERT_TASK: &str = r#"
 
 const DONE_TASK: &str = r#"UPDATE tasks SET status = 1 WHERE id = :id"#;
 
+const UPDATE_POMODORO: &str = r#"
+    UPDATE pomodoro
+    SET
+        status = :status,
+        end_time = :end_date
+    WHERE id = :id"#;
+
 const INSERT_POMO: &str = r#"
-"INSERT INTO
-    pomodoro (pomo_type, title, start_time, end_time, duration, completed, category)
-    VALUES (:pomo_type, :title, :start_time, :end_time, :duration, :completed, :category)
+INSERT INTO pomodoro (type, title, start_time, duration, status, category)
+    VALUES (:type, :title, :start_time, :duration, :status, :category)
     RETURNING id
 "#;
 
+const GET_POMODORO_LIST : &str = r#"
+    SELECT
+        id, type, title, start_time, end_time, duration, status, category
+    FROM pomodoro
+    ORDER BY start_time DESC
+    limit :limit
+"#;
 
 // NOTE: The 'Connection' as Ok value type of Result can become more generic later
 pub fn init_db(home_dir: String) -> Result<(), String> {
@@ -241,31 +255,16 @@ pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
-    let mut stmt = match conn.prepare("SELECT * FROM pomodoro") {
+    let mut stmt = match conn.prepare(GET_POMODORO_LIST) {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
 
-    let pomo_tasks_iter = match stmt.query_map([], |row| {
-        let start_date_str: String = row.get(5)?;
-        let start_date = parse_date(&start_date_str).unwrap();
+    let pomo_tasks_iter = stmt.query_map(named_params! {
+        ":limit": ls_args.limit,
+    }, parse_pomo_task);
 
-        let end_date_str: String = row.get(6)?;
-        let end_date = parse_date(&end_date_str).unwrap();
-
-        let duration_str: String = row.get(3)?;
-        let duration = parse_duration(&duration_str).unwrap();
-
-        Ok(PomoTask {
-            id: row.get(0)?,
-            pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
-            title: row.get(2)?,
-            duration,
-            category: row.get(4)?,
-            start_time: start_date,
-            end_time: end_date,
-        })
-    }) {
+    let pomo_tasks_iter =  match pomo_tasks_iter {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
@@ -286,20 +285,17 @@ pub fn add_pomodoro(pomo_task: &mut PomoTask) -> Result<(), String> {
     };
 
     let mut stmt = conn.prepare(INSERT_POMO)
-        .map_err(|_| "could not establish connection".to_string())?;
+        .map_err(|e|e.to_string())?;
 
     let start_time = Local::now();
-    let end_time = pomo_task.duration.add_date(&start_time);
-
     let res = stmt.query_row(
         named_params! {
-            ":pomo_type": pomo_task.pomo_type.to_usize(),
+            ":type": pomo_task.pomo_type.to_usize(),
             ":title": pomo_task.title,
             ":category": pomo_task.category,
             ":duration": pomo_task.duration.to_i64(),
             ":start_time": start_time.to_rfc3339(),
-            ":end_time": end_time.to_rfc3339(),
-            ":completed": 0,
+            ":status": pomo_task.status.to_usize(),
 
         },
         |row| Ok(row.get::<_,u64>(0)),
@@ -312,9 +308,27 @@ pub fn add_pomodoro(pomo_task: &mut PomoTask) -> Result<(), String> {
 
     pomo_task.id = id;
     pomo_task.start_time = start_time;
-    pomo_task.end_time = end_time;
 
     Ok(())
+}
+
+
+pub fn update_pomodoro(pomo: &PomoTask) -> Result<(), String> {
+    let conn = match get_connection() {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let rows_affected = conn.execute(UPDATE_POMODORO,named_params! {
+        ":id": pomo.id,
+        ":status": pomo.status.to_usize(),
+        ":end_date": pomo.end_time.to_rfc3339(),
+    });
+
+    match rows_affected {
+        Ok(_) => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 
@@ -328,5 +342,27 @@ fn parse_task(row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
         due_date,
         priority: Priority::from_usize(row.get::<_, usize>(4)?),
         category: row.get(5)?,
+    })
+}
+
+fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
+    let start_date_str: String = row.get(3)?;
+    let start_date = parse_date(&start_date_str).unwrap();
+
+    let end_date_str: String = row.get(4)?;
+    let end_date = parse_date(&end_date_str).unwrap();
+
+    let duration_str: String = row.get(5)?;
+    let duration = parse_duration(&duration_str).unwrap();
+
+    Ok(PomoTask {
+        id: row.get(0)?,
+        pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
+        title: row.get(2)?,
+        duration,
+        category: row.get(7)?,
+        status: PomoStatus::from_usize(row.get::<_,usize>(6)?),
+        start_time: start_date,
+        end_time: end_date,
     })
 }

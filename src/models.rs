@@ -1,5 +1,5 @@
 use chrono::{
-    Date, DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset,
+    DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset,
     TimeZone, Utc,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -296,6 +296,10 @@ impl DurationField {
     pub fn add_date(&self, date: &DateTime<Local>) -> DateTime<Local> {
         *date + self.0
     }
+
+    pub fn to_time_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.0.num_seconds() as u64)
+    }
 }
 
 impl From<DurationField> for chrono::Duration {
@@ -316,10 +320,61 @@ impl Default for DurationField {
     }
 }
 
+
+#[derive(Debug, Clone, Default)]
+pub enum PomoStatus {
+    Paused = 1,
+    Finished = 2,
+    #[default]
+    Running = 0,
+}
+
+impl From<String> for PomoStatus {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "paused" => PomoStatus::Paused,
+            "finished" => PomoStatus::Finished,
+            _ => PomoStatus::Running,
+        }
+    }
+}
+
+impl From<PomoStatus> for String {
+    fn from(p: PomoStatus) -> Self {
+        match p {
+            PomoStatus::Paused => "Paused".to_string(),
+            PomoStatus::Finished => "Finished".to_string(),
+            PomoStatus::Running => "Running".to_string(),
+        }
+    }
+}
+
+impl PomoStatus {
+    pub fn from_usize(n: usize) -> PomoStatus {
+        match n {
+            0 => PomoStatus::Running,
+            1 => PomoStatus::Paused,
+            2 => PomoStatus::Finished,
+            _ => PomoStatus::Running,
+        }
+    }
+
+    pub fn to_usize(&self) -> usize {
+        match self {
+            PomoStatus::Paused => 1,
+            PomoStatus::Finished => 2,
+            PomoStatus::Running => 0,
+        }
+    }
+}
+
+
 #[derive(Args, Debug)]
 pub struct PomoTask {
     #[clap(skip)]
     pub id: u64,
+    #[clap(skip)]
+    pub status: PomoStatus,
     #[clap(skip)]
     pub pomo_type: PomoType,
     /// Pomodoro session title
@@ -347,6 +402,7 @@ impl Default for PomoTask {
             category: None,
             start_time: Local::now(),
             end_time: Local::now() + Duration::minutes(25),
+            status: PomoStatus::Running,
         }
     }
 }
@@ -507,4 +563,20 @@ pub fn format_string_with_color(str: &str, color: Color) -> String {
         Color::Black => format!("\x1b[90m{}\x1b[0m", str),
         _ => str.to_string(),
     }
+}
+
+
+#[derive(Clone, Debug)]
+pub enum PomodoroEvent {
+    Resize(u16, u16),
+    Quit,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AppState {
+    pub title: String,
+    pub term_width: u16,
+    pub term_height: u16,
+    pub current_time: std::time::Duration,
+    pub quited: bool,
 }
