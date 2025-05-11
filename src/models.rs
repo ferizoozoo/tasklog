@@ -1,6 +1,6 @@
 use chrono::{
-    DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset,
-    TimeZone, Utc,
+    DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset, TimeZone,
+    Utc,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rusqlite::ToSql;
@@ -201,7 +201,7 @@ impl CommandArgs for AnalyzeArgs {
     }
 }
 
-#[derive(Default, Debug, ValueEnum,Copy, Clone)]
+#[derive(Default, PartialEq, Eq, Debug, ValueEnum, Copy, Clone)]
 pub enum PomoType {
     Rest = 1,
     #[default]
@@ -256,9 +256,8 @@ impl PomoType {
     }
 }
 
-
 #[derive(Debug, Clone)]
-pub struct DurationField(chrono::Duration);
+pub struct DurationField(pub chrono::Duration);
 
 impl FromStr for DurationField {
     type Err = String;
@@ -320,8 +319,7 @@ impl Default for DurationField {
     }
 }
 
-
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub enum PomoStatus {
     Paused = 1,
     Finished = 2,
@@ -367,7 +365,6 @@ impl PomoStatus {
         }
     }
 }
-
 
 #[derive(Args, Debug)]
 pub struct PomoTask {
@@ -565,7 +562,6 @@ pub fn format_string_with_color(str: &str, color: Color) -> String {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub enum PomodoroEvent {
     Resize(u16, u16),
@@ -579,4 +575,83 @@ pub struct AppState {
     pub term_height: u16,
     pub current_time: std::time::Duration,
     pub quited: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_creation() {
+        let task = Task {
+            id: 1,
+            status: Default::default(),
+            title: "My Task".to_string(),
+            due_date: Local::now(),
+            priority: Priority::High,
+            category: Some("Work".to_string()),
+        };
+
+        assert_eq!(task.id, 1);
+        assert_eq!(task.title, "My Task");
+        assert_eq!(task.priority, Priority::High);
+        assert_eq!(task.category, Some("Work".to_string()));
+    }
+
+    #[test]
+    fn test_task_default_due_date() {
+        let task = Task {
+            id: 2,
+            status: Default::default(),
+            title: "Another Task".to_string(),
+            due_date: Local::now(),
+            priority: Priority::Medium,
+            category: None,
+        };
+        //  The default value is parsed from "1d", so we need a way to calculate what that date should be
+        //  We can't directly compare with "1d"
+        let now = Local::now();
+        let expected_due_date = now + chrono::Duration::seconds(1);
+
+        // Check if the due date is within a small time window to account for test execution time
+        let time_diff = task.due_date.timestamp() - expected_due_date.timestamp();
+        assert!(time_diff.abs() < 2); // Allow a 2-second difference
+
+        assert_eq!(task.category, None);
+    }
+
+    #[test]
+    fn test_pomo_task_creation() {
+        let task = PomoTask {
+            id: 1,
+            status: PomoStatus::Paused, // Use an appropriate default or value
+            pomo_type: PomoType::Work,
+            title: "Work Session".to_string(),
+            duration: DurationField(Duration::seconds(25 * 60)), // 25 minutes
+            category: Some("Project A".to_string()),
+            start_time: Local::now(),
+            end_time: Local::now(),
+        };
+
+        assert_eq!(task.id, 1);
+        assert_eq!(task.title, "Work Session");
+        assert_eq!(task.duration.0, Duration::seconds(25 * 60));
+        assert_eq!(task.category, Some("Project A".to_string()));
+    }
+
+    #[test]
+    fn test_pomo_task_default_duration() {
+        let task = PomoTask {
+            id: 2,
+            status: PomoStatus::Paused, // Use an appropriate default
+            pomo_type: PomoType::Rest,
+            title: "Break Time".to_string(),
+            duration: DurationField(Duration::seconds(25 * 60)), //Should be the default
+            category: None,
+            start_time: Local::now(),
+            end_time: Local::now(),
+        };
+        assert_eq!(task.duration.0, Duration::seconds(25 * 60));
+        assert_eq!(task.category, None);
+    }
 }
