@@ -1,22 +1,40 @@
+use crate::helper::{draw_ui, run_event_thread, run_timer_thread};
+use crate::models::{
+    AnalyzeArgs, AppState, CommandArgs, LSType, PomoStatus, PomodoroEvent, TableRow,
+};
+use crate::{
+    helper::{self, get_home_directory},
+    models::{format_string_with_color, Color, DoneArgs, LSArgs, PomoTask, Task, TaskStatus},
+    repository,
+};
+use chrono::Local;
+use crossterm::cursor;
+use crossterm::{execute, terminal};
 use std::io::stdout;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use chrono::Local;
-use crossterm::{execute, terminal};
-use crate::{handlers, helper::{self, get_home_directory}, models::{format_string_with_color, Color, DoneArgs, LSArgs, PomoTask, Task, TaskStatus}, repository};
-use crate::helper::{draw_ui, run_event_thread, run_timer_thread};
-use crate::models::{AnalyzeArgs, CommandArgs, PomodoroEvent, AppState, PomoStatus};
-use crossterm::cursor;
 
-
+/// When we have to map types 10000000000000000000 times in rust the most simple tasks like passing
+/// to a fucking function, why the fuck they say Rust's performance is good?????????
 pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
     args.validate().map_err(|e| format!("Err: {}", e))?;
 
-    let t =  repository::get_tasks(args)
-        .map_err(|e| format_string_with_color(e.as_str(), Color::Red))?;
+    let t: Vec<Box<dyn TableRow>> = match args.ls_type {
+        LSType::Task => repository::get_tasks(args)
+            .map_err(|e| format_string_with_color(e.as_str(), Color::Red))?
+            .into_iter()
+            .map(|t| Box::new(t) as Box<dyn TableRow>)
+            .collect(),
 
-    helper::print_tasks_table(&t)
+        LSType::Pomo => repository::get_pomodoro(args)
+            .map_err(|e| format_string_with_color(e.as_str(), Color::Red))?
+            .into_iter()
+            .map(|t| Box::new(t) as Box<dyn TableRow>)
+            .collect(),
+    };
+
+    helper::print_tables(&t)
 }
 
 pub fn handel_add_task(task: Task) -> Result<(), String> {
@@ -24,9 +42,8 @@ pub fn handel_add_task(task: Task) -> Result<(), String> {
 
     let mut task = task;
 
-    repository::save_task(&mut task).map_err(|e| {
-        format_string_with_color(format!("Error: {}", e).as_str(), Color::Red)
-    })?;
+    repository::save_task(&mut task)
+        .map_err(|e| format_string_with_color(format!("Error: {}", e).as_str(), Color::Red))?;
 
     helper::print_tasks_table(&vec![task])
 }
@@ -37,7 +54,7 @@ pub fn handle_init_db() -> Result<(), String> {
     repository::init_db(home_dir)
 }
 
-pub fn handle_analyze(analyze_args: AnalyzeArgs) -> Result<(), String>{
+pub fn handle_analyze(_: AnalyzeArgs) -> Result<(), String> {
     Err("Not implemented yet".to_string())
 }
 
@@ -50,7 +67,10 @@ pub fn handle_done(done_args: DoneArgs) -> Result<(), String> {
 
     repository::done_task(done_args.id).map_err(|e| format!("Error: {}", e))?;
 
-    println!("{}\n\n",format_string_with_color("marked task as done", Color::Green));
+    println!(
+        "{}\n\n",
+        format_string_with_color("marked task as done", Color::Green)
+    );
 
     helper::print_tasks_table(&vec![task])
 }
@@ -61,7 +81,6 @@ pub fn handle_pomodoro(pomo_task: PomoTask) -> Result<(), String> {
     let mut pomo_value = pomo_task;
     repository::add_pomodoro(&mut pomo_value)?;
 
-
     helper::clear_terminal_screen()?;
 
     control_terminal(&mut pomo_value)
@@ -71,16 +90,13 @@ pub fn control_terminal(pomo_task: &mut PomoTask) -> Result<(), String> {
     let mut stdout = stdout();
 
     // --- Setup Terminal ---
-    terminal::enable_raw_mode()
-        .map_err(|e| e.to_string())?;
+    terminal::enable_raw_mode().map_err(|e| e.to_string())?;
     // Enter alternate screen to keep main terminal clean. Hide cursor.
-    execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)
-        .map_err(|e| e.to_string())?;
+    execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide).map_err(|e| e.to_string())?;
 
     let initial_duration = pomo_task.duration.to_time_duration();
 
-    let (term_width, term_height) = terminal::size()
-        .map_err(|e| e.to_string())?;
+    let (term_width, term_height) = terminal::size().map_err(|e| e.to_string())?;
 
     let mut app_state = AppState {
         title: pomo_task.title.clone(),
@@ -175,17 +191,15 @@ pub fn control_terminal(pomo_task: &mut PomoTask) -> Result<(), String> {
     let _ = event_handle.join();
 
     // Restore terminal: Leave alternate screen, show cursor.
-    execute!(stdout, terminal::LeaveAlternateScreen, cursor::Show)
-        .map_err(|e| e.to_string())?;
+    execute!(stdout, terminal::LeaveAlternateScreen, cursor::Show).map_err(|e| e.to_string())?;
 
-    terminal::disable_raw_mode()
-        .map_err(|e| e.to_string())?;
+    terminal::disable_raw_mode().map_err(|e| e.to_string())?;
 
     pomo_task.end_time = Local::now();
 
     if app_state.quited {
         pomo_task.status = PomoStatus::Paused;
-    }else {
+    } else {
         pomo_task.status = PomoStatus::Finished
     }
 

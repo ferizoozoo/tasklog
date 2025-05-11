@@ -2,7 +2,7 @@ use crate::models::PomoStatus;
 use crate::parser::execute;
 use crate::{
     helper::get_home_directory,
-    models::{parse_date, parse_duration, LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
+    models::{LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
 };
 use chrono::{Date, DateTime, Datelike, Duration, Local};
 use rusqlite::{named_params, params, types::Value, Connection, ToSql};
@@ -56,12 +56,12 @@ const GET_TASK_BY_ID: &str = r#"
 const GET_TASKS: &str = r#"
     SELECT id, status, title, due_date, priority, category FROM tasks
         WHERE due_date <= :due_date {{where_category}} {{where_priority}} {{where_status}}
-        ORDER BY created_at
-        DESC limit :limit"#;
+        ORDER BY created_at  
+        LIMIT :limit"#;
 
 const INSERT_TASK: &str = r#"
-    INSERT INTO tasks (status, title, due_date, pomo_type, category)
-        VALUES (:status, :title, :due_date, :pomo_type, :category)
+    INSERT INTO tasks (status, title, due_date, priority, category)
+        VALUES (:status, :title, :due_date, :priority, :category)
 "#;
 
 const DONE_TASK: &str = r#"UPDATE tasks SET status = 1 WHERE id = :id"#;
@@ -254,7 +254,7 @@ pub fn done_task(task_id: usize) -> Result<(), String> {
     Ok(())
 }
 
-pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
+pub fn get_pomodoro(ls_args: &LSArgs) -> Result<Vec<PomoTask>, String> {
     let conn = match get_connection() {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
@@ -356,19 +356,20 @@ fn parse_task(row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
 
 fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
     let start_date_str: String = row.get(3)?;
-    let start_date = parse_date(&start_date_str).unwrap();
+    let start_date = DateTime::parse_from_rfc3339(&start_date_str)
+        .unwrap()
+        .with_timezone(&Local);
 
     let end_date_str: String = row.get(4)?;
-    let end_date = parse_date(&end_date_str).unwrap();
-
-    let duration_str: String = row.get(5)?;
-    let duration = parse_duration(&duration_str).unwrap();
+    let end_date = DateTime::parse_from_rfc3339(&end_date_str)
+        .unwrap()
+        .with_timezone(&Local);
 
     Ok(PomoTask {
         id: row.get(0)?,
         pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
         title: row.get(2)?,
-        duration,
+        duration: DurationField::from_i64(row.get::<_, i64>(5)?),
         category: row.get(7)?,
         status: PomoStatus::from_usize(row.get::<_, usize>(6)?),
         start_time: start_date,
