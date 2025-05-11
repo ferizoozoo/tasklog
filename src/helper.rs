@@ -1,21 +1,21 @@
-use std::env;
-use crate::models::{format_string_with_color, Color, Task, AppState, PomodoroEvent, PomoTask};
+use crate::models::{format_string_with_color, AppState, Color, PomodoroEvent, TableRow, Task};
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute, queue, style::Print,
-    terminal::{self, ClearType, Clear},
+    execute, queue,
+    style::Print,
+    terminal::{self, Clear, ClearType},
 };
+use std::env;
 use std::{
-    io::{stdout, Stdout, Write},
-    sync::mpsc::{self, Receiver, Sender},
+    io::{Stdout, Write},
+    sync::mpsc::{Receiver, Sender},
     thread,
     time::Duration,
 };
-use crate::handlers;
 
-const BOX_WIDTH:u16=40;
-const BOX_HEIGHT:u16 = 4;
+const BOX_WIDTH: u16 = 40;
+const BOX_HEIGHT: u16 = 4;
 
 pub fn get_home_directory() -> Result<String, String> {
     if let Ok(path) = env::var("HOME") {
@@ -33,8 +33,55 @@ pub fn get_home_directory() -> Result<String, String> {
     Err("Could not get the home directory".to_string())
 }
 
+pub fn print_tables(items: &Vec<Box<dyn TableRow>>) -> Result<(), String> {
+    if items.is_empty() {
+        return Err("NOT FOUND".to_string());
+    };
 
-pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(),String> {
+    let first_item = match items.first() {
+        None => return Err("NOT FOUND".to_string()),
+        Some(item) => item,
+    };
+
+    let headers = first_item.headers();
+    let mut col_widths = headers.iter().map(|h| h.len()).collect::<Vec<usize>>();
+
+    for item in items {
+        let row = item.row();
+        for (i, cell) in row.iter().enumerate() {
+            if i < col_widths.len() {
+                col_widths[i] = col_widths[i].max(cell.len());
+            }
+        }
+    }
+
+    print!("| ");
+    for (i, header) in headers.iter().enumerate() {
+        print!("{:<width$} | ", header, width = col_widths[i]);
+    }
+    println!();
+
+    // Print separator row
+    print!("|");
+    for width in &col_widths {
+        print!("-{}-|", "-".repeat(*width));
+    }
+    println!();
+
+    // Print each data row
+    for item in items {
+        let row = item.row();
+        print!("| ");
+        for (i, cell) in row.iter().enumerate() {
+            print!("{:<width$} | ", cell, width = col_widths[i]);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(), String> {
     if tasks.is_empty() {
         return Err(format_string_with_color("NOT_FOUND", Color::Red));
     }
@@ -44,12 +91,12 @@ pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(),String> {
 
     // Calculate the width of each column based on content
     let mut col_widths = vec![
-        headers[0].len(),  // id
-        headers[1].len(),  // title
-        headers[2].len(),  // status
-        headers[3].len(),  // due_date
-        headers[4].len(),  // priority
-        headers[5].len(),  // category
+        headers[0].len(), // id
+        headers[1].len(), // title
+        headers[2].len(), // status
+        headers[3].len(), // due_date
+        headers[4].len(), // priority
+        headers[5].len(), // category
     ];
 
     // Update the column widths based on the task data
@@ -98,13 +145,25 @@ pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(),String> {
         print!("{:<width$} | ", task.title, width = col_widths[1]);
 
         // Status column
-        print!("{:<width$} | ", format!("{:?}", task.status), width = col_widths[2]);
+        print!(
+            "{:<width$} | ",
+            format!("{:?}", task.status),
+            width = col_widths[2]
+        );
 
         // Due date column
-        print!("{:<width$} | ", task.due_date.format("%Y-%m-%d"), width = col_widths[3]);
+        print!(
+            "{:<width$} | ",
+            task.due_date.format("%Y-%m-%d"),
+            width = col_widths[3]
+        );
 
         // Priority column
-        print!("{:<width$} | ", format!("{:?}", task.priority), width = col_widths[4]);
+        print!(
+            "{:<width$} | ",
+            format!("{:?}", task.priority),
+            width = col_widths[4]
+        );
 
         // Category column
         let category_str = task.category.as_ref().map_or("", |s| s.as_str());
@@ -116,39 +175,15 @@ pub fn print_tasks_table(tasks: &Vec<Task>) -> Result<(),String> {
     Ok(())
 }
 
-
-fn format_time(seconds: u64) -> String {
-    let minutes = seconds / 60;
-    let seconds = seconds % 60;
-    format!("{:02}:{:02}", minutes, seconds)
-}
-
-fn center_text(text: &str, width: usize) -> String {
-    let padding = if text.len() < width {
-        (width - text.len()) / 2
-    } else {
-        0
-    };
-
-    format!("{}{}", " ".repeat(padding), text)
-}
-
-
-
 pub fn clear_terminal_screen() -> Result<(), String> {
     let mut stout = std::io::stdout();
-    let res = execute!(
-        stout,
-        Clear(ClearType::All),
-        cursor::MoveTo(0,0),
-    );
+    let res = execute!(stout, Clear(ClearType::All), cursor::MoveTo(0, 0),);
 
     match res {
         Ok(_) => Ok(()),
-        Err(e) =>  Err(e.to_string()),
+        Err(e) => Err(e.to_string()),
     }
 }
-
 
 pub fn draw_ui(stdout: &mut Stdout, state: &AppState) -> Result<(), String> {
     queue!(stdout, terminal::Clear(ClearType::All)).map_err(|e| e.to_string())?;
@@ -175,7 +210,11 @@ pub fn draw_ui(stdout: &mut Stdout, state: &AppState) -> Result<(), String> {
     let border_line = "-".repeat(BOX_WIDTH as usize);
 
     let title_to_display = if state.title.chars().count() > content_inner_width {
-        state.title.chars().take(content_inner_width).collect::<String>()
+        state
+            .title
+            .chars()
+            .take(content_inner_width)
+            .collect::<String>()
     } else {
         state.title.to_string()
     };
@@ -186,9 +225,8 @@ pub fn draw_ui(stdout: &mut Stdout, state: &AppState) -> Result<(), String> {
 
     let mut time_padded = format!("{:^width$}", time_str, width = content_inner_width);
     time_padded = format_string_with_color(time_padded.as_str(), Color::Yellow);
-    
-    let time_line_content = format!("|{}|", time_padded);
 
+    let time_line_content = format!("|{}|", time_padded);
 
     let res = queue!(
         stdout,
@@ -204,7 +242,7 @@ pub fn draw_ui(stdout: &mut Stdout, state: &AppState) -> Result<(), String> {
 
     match res {
         Ok(_) => stdout.flush().map_err(|e| e.to_string()),
-        Err(e) =>  Err(e.to_string()),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -232,7 +270,8 @@ pub fn run_timer_thread(
 
         // Wait for one second.
         // To make the quit signal check more responsive, sleep in smaller intervals.
-        for _ in 0..10 { // Sleep for 10 * 100ms = 1 second
+        for _ in 0..10 {
+            // Sleep for 10 * 100ms = 1 second
             if quit_rx.try_recv().is_ok() {
                 return; // Exit immediately if quit signal received during sleep.
             }
@@ -255,12 +294,14 @@ pub fn run_event_thread(event_tx: Sender<PomodoroEvent>, quit_rx: Receiver<()>) 
             match event::read() {
                 // For killing the app, use the 'q' key or 'ctrl+c'
                 Ok(Event::Key(KeyEvent {
-                                  code: KeyCode::Char('q'), ..
-                              }))
+                    code: KeyCode::Char('q'),
+                    ..
+                }))
                 | Ok(Event::Key(KeyEvent {
-                                    code: KeyCode::Char('c'),
-                                    modifiers: KeyModifiers::CONTROL, ..
-                                })) => {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => {
                     if event_tx.send(PomodoroEvent::Quit).is_err() {
                         break; // Main thread likely terminated.
                     }
@@ -287,5 +328,3 @@ pub fn run_event_thread(event_tx: Sender<PomodoroEvent>, quit_rx: Receiver<()>) 
         // No explicit sleep here as event::poll has a timeout.
     }
 }
-
-

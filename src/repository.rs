@@ -1,14 +1,11 @@
-use std::collections::HashMap;
-use rusqlite::{params, Connection, ToSql, types::Value, named_params};
-use std::fs;
-use std::ptr::replace;
-use chrono::{Date, DateTime, Datelike, Duration, Local};
+use crate::models::{DurationField, PomoStatus};
 use crate::{
     helper::get_home_directory,
-    models::{parse_date, parse_duration, LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
+    models::{LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
 };
-use crate::models::PomoStatus;
-use crate::parser::execute;
+use chrono::{DateTime, Datelike, Local};
+use rusqlite::{named_params, params, Connection, ToSql};
+use std::fs;
 
 const DB_FILE_PATH: &str = "/.tasklog";
 const DB_FILE_NAME: &str = "/db.sqlite";
@@ -56,12 +53,12 @@ const GET_TASK_BY_ID: &str = r#"
 const GET_TASKS: &str = r#"
     SELECT id, status, title, due_date, priority, category FROM tasks
         WHERE due_date <= :due_date {{where_category}} {{where_priority}} {{where_status}}
-        ORDER BY created_at
-        DESC limit :limit"#;
+        ORDER BY created_at  
+        LIMIT :limit"#;
 
 const INSERT_TASK: &str = r#"
-    INSERT INTO tasks (status, title, due_date, pomo_type, category)
-        VALUES (:status, :title, :due_date, :pomo_type, :category)
+    INSERT INTO tasks (status, title, due_date, priority, category)
+        VALUES (:status, :title, :due_date, :priority, :category)
 "#;
 
 const DONE_TASK: &str = r#"UPDATE tasks SET status = 1 WHERE id = :id"#;
@@ -79,7 +76,7 @@ INSERT INTO pomodoro (type, title, start_time, duration, status, category)
     RETURNING id
 "#;
 
-const GET_POMODORO_LIST : &str = r#"
+const GET_POMODORO_LIST: &str = r#"
     SELECT
         id, type, title, start_time, end_time, duration, status, category
     FROM pomodoro
@@ -122,7 +119,11 @@ pub fn init_db(home_dir: String) -> Result<(), String> {
 fn get_connection() -> Result<Connection, String> {
     let home_dir = match get_home_directory() {
         Ok(val) => val,
-        Err(err) => return Err("Could connect to the database, please run the init command again".to_string())
+        Err(err) => {
+            return Err(
+                "Could connect to the database, please run the init command again".to_string(),
+            )
+        }
     };
 
     let path = home_dir + DB_FILE_PATH + DB_FILE_NAME;
@@ -134,57 +135,55 @@ fn get_connection() -> Result<Connection, String> {
 pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
     let conn = get_connection()?;
     let now = Local::now();
-    let due_date = now.with_day(now.day()+(ls_args.days as u32)).unwrap().to_rfc3339();
-
+    let due_date = now
+        .with_day(now.day() + (ls_args.days as u32))
+        .unwrap()
+        .to_rfc3339();
 
     let mut query = GET_TASKS.to_string();
-    let mut params_values:Vec<(&str, &dyn ToSql)> = vec![(":due_date", &due_date), (":limit", &ls_args.limit)];
+    let mut params_values: Vec<(&str, &dyn ToSql)> =
+        vec![(":due_date", &due_date), (":limit", &ls_args.limit)];
 
-    let p_value:usize;
+    let p_value: usize;
     match ls_args.priority {
         None => query = query.replace("{{where_priority}}", ""),
         Some(p) => {
             query = query.replace("{{where_priority}}", "AND priority = :priority");
             p_value = p as usize;
-            params_values.push((":priority", &p_value ));
-        },
-    };
-
-
-    let category_value:String;
-    let query = match &ls_args.category {
-        None => {
-            query.replace("{{where_category}}", "")
-        },
-        Some(category) => {
-            category_value = category.clone();
-            params_values.push((":category",&category_value));
-            query.replace("{{where_category}}", "AND category = :category")
-        },
-    };
-
-    let status_value:usize;
-    let query = match &ls_args.status {
-        None => {
-            query.replace("{{where_status}}", "AND status = 0")
-        },
-        Some(status) => {
-            match status {
-                TaskStatus::Done | TaskStatus::Open => {
-                    status_value = status.to_usize();
-                    params_values.push((":status", &status_value));
-                    query.replace("{{where_status}}", "AND status = :status")
-                },
-                _ => query.replace("{{where_status}}", ""),
-            }
+            params_values.push((":priority", &p_value));
         }
     };
 
-    let mut stmt = conn.prepare(query.as_str()).map_err(|err| {err.to_string()})?;
+    let category_value: String;
+    let query = match &ls_args.category {
+        None => query.replace("{{where_category}}", ""),
+        Some(category) => {
+            category_value = category.clone();
+            params_values.push((":category", &category_value));
+            query.replace("{{where_category}}", "AND category = :category")
+        }
+    };
+
+    let status_value: usize;
+    let query = match &ls_args.status {
+        None => query.replace("{{where_status}}", "AND status = 0"),
+        Some(status) => match status {
+            TaskStatus::Done | TaskStatus::Open => {
+                status_value = status.to_usize();
+                params_values.push((":status", &status_value));
+                query.replace("{{where_status}}", "AND status = :status")
+            }
+            _ => query.replace("{{where_status}}", ""),
+        },
+    };
+
+    let mut stmt = conn
+        .prepare(query.as_str())
+        .map_err(|err| err.to_string())?;
 
     let tasks_iter = stmt.query_map(params_values.as_slice(), parse_task);
 
-    let tasks_iter = match tasks_iter{
+    let tasks_iter = match tasks_iter {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
@@ -204,15 +203,14 @@ pub fn save_task(task: &mut Task) -> Result<(), String> {
         Err(err) => return Err(err.to_string()),
     };
 
-    let mut stmt= conn.prepare(INSERT_TASK)
-        .map_err(|err| err.to_string())?;
+    let mut stmt = conn.prepare(INSERT_TASK).map_err(|err| err.to_string())?;
 
     println!("{:?}", task);
 
     let status = task.status as usize;
     println!("status as usize: {}", status);
 
-    let res =  stmt.execute(named_params! {
+    let res = stmt.execute(named_params! {
         ":status": status,
         ":title": task.title,
         ":due_date": task.due_date.to_rfc3339(),
@@ -221,7 +219,7 @@ pub fn save_task(task: &mut Task) -> Result<(), String> {
     });
 
     match res {
-        Ok(_) => {Ok(())}
+        Ok(_) => Ok(()),
         Err(err) => Err(err.to_string()),
     }
 }
@@ -232,7 +230,8 @@ pub fn get_task_by_id(task_id: usize) -> Result<Task, String> {
         Err(err) => return Err(err.to_string()),
     };
 
-     conn.query_row(GET_TASK_BY_ID, params![task_id], parse_task).map_err(|err| err.to_string())
+    conn.query_row(GET_TASK_BY_ID, params![task_id], parse_task)
+        .map_err(|err| err.to_string())
 }
 
 pub fn done_task(task_id: usize) -> Result<(), String> {
@@ -241,16 +240,18 @@ pub fn done_task(task_id: usize) -> Result<(), String> {
         Err(err) => return Err(err.to_string()),
     };
 
-    let rows_affected = conn.execute(DONE_TASK, params![task_id]).map_err(|err| err.to_string())?;
+    let rows_affected = conn
+        .execute(DONE_TASK, params![task_id])
+        .map_err(|err| err.to_string())?;
 
     if rows_affected == 0 {
         return Err("Could not mark task as done".to_string());
     };
-    
+
     Ok(())
 }
 
-pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
+pub fn get_pomodoro(ls_args: &LSArgs) -> Result<Vec<PomoTask>, String> {
     let conn = match get_connection() {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
@@ -260,11 +261,14 @@ pub fn get_pomodoro(ls_args: LSArgs) -> Result<Vec<PomoTask>, String> {
         Err(err) => return Err(err.to_string()),
     };
 
-    let pomo_tasks_iter = stmt.query_map(named_params! {
-        ":limit": ls_args.limit,
-    }, parse_pomo_task);
+    let pomo_tasks_iter = stmt.query_map(
+        named_params! {
+            ":limit": ls_args.limit,
+        },
+        parse_pomo_task,
+    );
 
-    let pomo_tasks_iter =  match pomo_tasks_iter {
+    let pomo_tasks_iter = match pomo_tasks_iter {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
@@ -284,8 +288,7 @@ pub fn add_pomodoro(pomo_task: &mut PomoTask) -> Result<(), String> {
         Err(err) => return Err(err.to_string()),
     };
 
-    let mut stmt = conn.prepare(INSERT_POMO)
-        .map_err(|e|e.to_string())?;
+    let mut stmt = conn.prepare(INSERT_POMO).map_err(|e| e.to_string())?;
 
     let start_time = Local::now();
     let res = stmt.query_row(
@@ -298,10 +301,10 @@ pub fn add_pomodoro(pomo_task: &mut PomoTask) -> Result<(), String> {
             ":status": pomo_task.status.to_usize(),
 
         },
-        |row| Ok(row.get::<_,u64>(0)),
+        |row| Ok(row.get::<_, u64>(0)),
     );
 
-    let id= match res {
+    let id = match res {
         Ok(val) => val.unwrap(),
         Err(err) => return Err(err.to_string()),
     };
@@ -312,18 +315,20 @@ pub fn add_pomodoro(pomo_task: &mut PomoTask) -> Result<(), String> {
     Ok(())
 }
 
-
 pub fn update_pomodoro(pomo: &PomoTask) -> Result<(), String> {
     let conn = match get_connection() {
         Ok(val) => val,
         Err(err) => return Err(err.to_string()),
     };
 
-    let rows_affected = conn.execute(UPDATE_POMODORO,named_params! {
-        ":id": pomo.id,
-        ":status": pomo.status.to_usize(),
-        ":end_date": pomo.end_time.to_rfc3339(),
-    });
+    let rows_affected = conn.execute(
+        UPDATE_POMODORO,
+        named_params! {
+            ":id": pomo.id,
+            ":status": pomo.status.to_usize(),
+            ":end_date": pomo.end_time.to_rfc3339(),
+        },
+    );
 
     match rows_affected {
         Ok(_) => Ok(()),
@@ -331,10 +336,11 @@ pub fn update_pomodoro(pomo: &PomoTask) -> Result<(), String> {
     }
 }
 
-
 fn parse_task(row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
-    let date_str: String = row.get::<_,String>(3)?;
-    let due_date:DateTime<Local> = DateTime::parse_from_rfc3339(&date_str).unwrap().with_timezone(&Local);
+    let date_str: String = row.get::<_, String>(3)?;
+    let due_date: DateTime<Local> = DateTime::parse_from_rfc3339(&date_str)
+        .unwrap()
+        .with_timezone(&Local);
     Ok(Task {
         id: row.get(0)?,
         status: TaskStatus::from_usize(row.get::<_, usize>(1)?),
@@ -347,21 +353,22 @@ fn parse_task(row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
 
 fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
     let start_date_str: String = row.get(3)?;
-    let start_date = parse_date(&start_date_str).unwrap();
+    let start_date = DateTime::parse_from_rfc3339(&start_date_str)
+        .unwrap()
+        .with_timezone(&Local);
 
     let end_date_str: String = row.get(4)?;
-    let end_date = parse_date(&end_date_str).unwrap();
-
-    let duration_str: String = row.get(5)?;
-    let duration = parse_duration(&duration_str).unwrap();
+    let end_date = DateTime::parse_from_rfc3339(&end_date_str)
+        .unwrap()
+        .with_timezone(&Local);
 
     Ok(PomoTask {
         id: row.get(0)?,
         pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
         title: row.get(2)?,
-        duration,
+        duration: DurationField::from_i64(row.get::<_, i64>(5)?),
         category: row.get(7)?,
-        status: PomoStatus::from_usize(row.get::<_,usize>(6)?),
+        status: PomoStatus::from_usize(row.get::<_, usize>(6)?),
         start_time: start_date,
         end_time: end_date,
     })
