@@ -357,10 +357,12 @@ fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
         .unwrap()
         .with_timezone(&Local);
 
-    let end_date_str: String = row.get(4)?;
-    let end_date = DateTime::parse_from_rfc3339(&end_date_str)
-        .unwrap()
-        .with_timezone(&Local);
+    let end_date = match row.get::<_, Option<String>>(4)? {
+        Some(end_date_str) => DateTime::parse_from_rfc3339(&end_date_str)
+            .unwrap()
+            .with_timezone(&Local),
+        None => start_date + chrono::Duration::minutes(25), // Default to 25 minutes from start
+    };
 
     Ok(PomoTask {
         id: row.get(0)?,
@@ -372,4 +374,89 @@ fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
         start_time: start_date,
         end_time: end_date,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_task() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                status INTEGER,
+                title TEXT,
+                due_date TEXT,
+                priority INTEGER,
+                category TEXT
+            )",
+            [],
+        )
+        .unwrap();
+
+        let now = Local::now();
+        conn.execute(
+            "INSERT INTO tasks (id, status, title, due_date, priority, category)
+             VALUES (:id, :status, :title, :due_date, :priority, :category)",
+            named_params! {
+                ":id": 1,
+                ":status": 0,                    // status (0 = Open)
+                ":title": "Test Task",
+                ":due_date": now.to_rfc3339(),
+                ":priority": 2,                  // priority (2 = Medium)
+                ":category": "Test",
+            },
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT id, status, title, due_date, priority, category FROM tasks")
+            .unwrap();
+        let task = stmt.query_row([], |row| parse_task(row)).unwrap();
+
+        assert_eq!(task.id, 1);
+        assert_eq!(task.status, TaskStatus::Open);
+        assert_eq!(task.title, "Test Task");
+        assert_eq!(task.priority, Priority::Medium);
+        assert_eq!(task.category, Some("Test".to_string()));
+    }
+
+    #[test]
+    fn test_parse_pomo_task() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(CREATE_POMODORO_TABLE, []).unwrap();
+
+        let now = Local::now();
+
+        // First insert the pomodoro record and get the ID
+        let mut stmt = conn.prepare(INSERT_POMO).unwrap();
+        let _ = stmt
+            .query_row(
+                named_params! {
+                    ":type": 1,                      // type (1 = Work)
+                    ":title": "Test Pomo",
+                    ":start_time": now.to_rfc3339(),
+                    ":duration": 1500,
+                    ":status": 0,
+                    ":category": "Test"
+                },
+                |row| Ok(row.get::<_, i64>(0)),
+            )
+            .unwrap();
+
+        // Now query the inserted record
+        let mut stmt = conn.prepare(
+            "SELECT id, type, title, start_time, end_time, duration, status, category FROM pomodoro"
+        ).unwrap();
+        let pomo = stmt.query_row([], |row| parse_pomo_task(row)).unwrap();
+
+        assert_eq!(pomo.id, 1);
+        assert_eq!(pomo.pomo_type, PomoType::Work);
+        assert_eq!(pomo.title, "Test Pomo");
+        assert_eq!(pomo.duration.to_i64(), 1500);
+        assert_eq!(pomo.category, Some("Test".to_string()));
+        assert_eq!(pomo.status, PomoStatus::Running);
+    }
 }

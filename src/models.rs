@@ -262,7 +262,7 @@ impl CommandArgs for AnalyzeArgs {
     }
 }
 
-#[derive(Default, Debug, ValueEnum, Copy, Clone)]
+#[derive(Default, Debug, ValueEnum, Copy, Clone, PartialEq)]
 pub enum PomoType {
     Rest = 1,
     #[default]
@@ -391,7 +391,7 @@ impl Default for DurationField {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum PomoStatus {
     Paused = 1,
     Finished = 2,
