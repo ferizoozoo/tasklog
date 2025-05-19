@@ -3,9 +3,10 @@ use crate::{
     helper::get_home_directory,
     models::{LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
 };
-use chrono::{DateTime, Datelike, Local};
+use chrono::{DateTime, Local};
 use rusqlite::{named_params, params, Connection, ToSql};
 use std::fs;
+use std::ops::Add;
 
 const DB_FILE_PATH: &str = "/.tasklog";
 const DB_FILE_NAME: &str = "/db.sqlite";
@@ -53,7 +54,7 @@ const GET_TASK_BY_ID: &str = r#"
 const GET_TASKS: &str = r#"
     SELECT id, status, title, due_date, priority, category FROM tasks
         WHERE due_date <= :due_date {{where_category}} {{where_priority}} {{where_status}}
-        ORDER BY created_at  
+        ORDER BY created_at
         LIMIT :limit"#;
 
 const INSERT_TASK: &str = r#"
@@ -119,7 +120,7 @@ pub fn init_db(home_dir: String) -> Result<(), String> {
 fn get_connection() -> Result<Connection, String> {
     let home_dir = match get_home_directory() {
         Ok(val) => val,
-        Err(err) => {
+        Err(_) => {
             return Err(
                 "Could connect to the database, please run the init command again".to_string(),
             )
@@ -136,8 +137,7 @@ pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
     let conn = get_connection()?;
     let now = Local::now();
     let due_date = now
-        .with_day(now.day() + (ls_args.days as u32))
-        .unwrap()
+        .add(chrono::Duration::days(ls_args.days as i64))
         .to_rfc3339();
 
     let mut query = GET_TASKS.to_string();

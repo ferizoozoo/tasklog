@@ -34,6 +34,13 @@ pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
             .collect(),
     };
 
+    let due_date = Local::now() + chrono::Duration::days(args.days as i64);
+    let text = format_string_with_color(
+        format!("Results tasks with due_date as {} or before:\n", due_date.format("%Y-%m-%d")).as_str(),
+        Color::Green,
+    );
+
+    println!("{}",text);
     helper::print_tables(&t)
 }
 
