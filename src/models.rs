@@ -615,15 +615,11 @@ pub fn parse_date(s: &str) -> Result<DateTime<Local>, String> {
         .parse()
         .map_err(|_| format!("Cannot parse '{}' as a number", value_str))?;
 
+    let val = value as i64;
     match unit {
-        "d" => Ok(Local::now() + Duration::days(value as i64)),
-        "m" => {
-            let date = Local::now();
-            match date.with_month(date.month() + value) {
-                Some(d) => Ok(d),
-                None => Err(format!("could not parse date {}", s)),
-            }
-        }
+        "d" => Ok(Local::now() + Duration::days(val)),
+        // Simply using date.with_moth will cause some errors when the month value geos beyond 12 
+        "m" => Ok(Local::now() + Duration::days(val * 30)), 
         "y" => {
             let date = Local::now();
             match date.with_year(date.year() + (value as i32)) {

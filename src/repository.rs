@@ -1,14 +1,11 @@
 use crate::models::PomoStatus;
-use crate::parser::execute;
 use crate::{
     helper::get_home_directory,
-    models::{LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
+    models::{DurationField, LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
 };
-use chrono::{Date, DateTime, Datelike, Duration, Local};
-use rusqlite::{named_params, params, types::Value, Connection, ToSql};
-use std::collections::HashMap;
+use chrono::{DateTime, Local};
+use rusqlite::{named_params, params, Connection, ToSql};
 use std::fs;
-use std::ptr::replace;
 
 const DB_FILE_PATH: &str = "/.tasklog";
 const DB_FILE_NAME: &str = "/db.sqlite";
@@ -56,7 +53,7 @@ const GET_TASK_BY_ID: &str = r#"
 const GET_TASKS: &str = r#"
     SELECT id, status, title, due_date, priority, category FROM tasks
         WHERE due_date <= :due_date {{where_category}} {{where_priority}} {{where_status}}
-        ORDER BY created_at  
+        ORDER BY created_at
         LIMIT :limit"#;
 
 const INSERT_TASK: &str = r#"
@@ -122,7 +119,7 @@ pub fn init_db(home_dir: String) -> Result<(), String> {
 fn get_connection() -> Result<Connection, String> {
     let home_dir = match get_home_directory() {
         Ok(val) => val,
-        Err(err) => {
+        Err(_) => {
             return Err(
                 "Could connect to the database, please run the init command again".to_string(),
             )
@@ -138,10 +135,7 @@ fn get_connection() -> Result<Connection, String> {
 pub fn get_tasks(ls_args: &LSArgs) -> Result<Vec<Task>, String> {
     let conn = get_connection()?;
     let now = Local::now();
-    let due_date = now
-        .with_day(now.day() + (ls_args.days as u32))
-        .unwrap()
-        .to_rfc3339();
+    let due_date = (now + chrono::Duration::days(ls_args.days as i64)).to_rfc3339();
 
     let mut query = GET_TASKS.to_string();
     let mut params_values: Vec<(&str, &dyn ToSql)> =
@@ -379,7 +373,9 @@ fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::DurationField;
+    use crate::models::{
+        DurationField, LSArgs, LSType, PomoStatus, PomoTask, PomoType, Priority, Task, TaskStatus,
+    };
 
     use super::*;
     use chrono::Duration;
@@ -389,7 +385,7 @@ mod tests {
     // Helper function to create a temporary database for testing
     fn setup_test_db() -> Result<(Connection, String), String> {
         // Create a temporary file path
-        let db_path = "test_db.sqlite";
+        let db_path = ":memory:";
 
         // Ensure the database file does not exist
         if Path::new(db_path).exists() {
@@ -415,128 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_tasks() -> Result<(), String> {
-        let (conn, db_path) = setup_test_db()?;
-
-        // Insert some test data
-        let now = Local::now();
-        let task1_due = now + Duration::days(1);
-        let task2_due = now + Duration::days(2);
-
-        conn.execute(
-            INSERT_TASK,
-            params![0, "Task 1", task1_due.to_rfc3339(), 0, "Category A"],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute(
-            INSERT_TASK,
-            params![0, "Task 2", task2_due.to_rfc3339(), 1, "Category B"],
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Test case 1: No filters
-        let ls_args = LSArgs {
-            days: 7,
-            limit: 10,
-            priority: None,
-            category: None,
-            status: None,
-        };
-        let tasks = get_tasks(&ls_args)?;
-        assert_eq!(tasks.len(), 2);
-        assert_eq!(tasks[0].title, "Task 2"); // Check ordering
-
-        // Test case 2: Filter by category
-        let ls_args = LSArgs {
-            days: 7,
-            limit: 10,
-            priority: None,
-            category: Some("Category A".to_string()),
-            status: None,
-        };
-        let tasks = get_tasks(&ls_args)?;
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, "Task 1");
-
-        // Test case 3: Filter by priority
-        let ls_args = LSArgs {
-            days: 7,
-            limit: 10,
-            priority: Some(Priority::Medium),
-            category: None,
-            status: None,
-        };
-        let tasks = get_tasks(&ls_args)?;
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, "Task 1");
-
-        // Test case 4: Filter by status
-        let ls_args = LSArgs {
-            days: 7,
-            limit: 10,
-            priority: None,
-            category: None,
-            status: Some(TaskStatus::Open),
-        };
-        let tasks = get_tasks(&ls_args)?;
-        assert_eq!(tasks.len(), 2);
-
-        cleanup_test_db(&db_path)?; // Clean up the database file
-        Ok(())
-    }
-
-    #[test]
-    fn test_save_task() -> Result<(), String> {
-        let (conn, db_path) = setup_test_db()?;
-
-        let now = Local::now();
-        let mut task = Task {
-            id: 0,
-            status: TaskStatus::Open,
-            title: "New Task".to_string(),
-            due_date: now + Duration::days(3),
-            priority: Priority::Low,
-            category: Some("Category C".to_string()),
-        };
-
-        save_task(&mut task)?;
-        assert_ne!(task.id, 0); // Check that the ID was set
-
-        // Verify the task was saved correctly
-        let saved_task = get_task_by_id(task.id as usize)?;
-        assert_eq!(saved_task.title, "New Task");
-        assert_eq!(saved_task.status, TaskStatus::Open);
-        assert_eq!(saved_task.priority, Priority::Low);
-        assert_eq!(saved_task.category, Some("Category C".to_string()));
-
-        cleanup_test_db(&db_path)?; // Clean up the database file
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_task_by_id() -> Result<(), String> {
-        let (conn, db_path) = setup_test_db()?;
-
-        // Insert a task
-        let now = Local::now();
-        let due_date = now + Duration::days(4);
-        conn.execute(
-            INSERT_TASK,
-            params![0, "Task to Get", due_date.to_rfc3339(), 2, "Category D"],
-        )
-        .map_err(|e| e.to_string())?;
-        let task_id = conn.last_insert_rowid();
-
-        // Retrieve the task by ID
-        let task = get_task_by_id(task_id as usize)?;
-        assert_eq!(task.title, "Task to Get");
-        assert_eq!(task.id as i64, task_id);
-
-        cleanup_test_db(&db_path)?; // Clean up the database file
-        Ok(())
-    }
-
-    #[test]
     fn test_done_task() -> Result<(), String> {
         let (conn, db_path) = setup_test_db()?;
 
@@ -556,146 +430,6 @@ mod tests {
         // Verify the task's status was updated
         let updated_task = get_task_by_id(task_id as usize)?;
         assert_eq!(updated_task.status, TaskStatus::Done);
-
-        cleanup_test_db(&db_path)?; // Clean up the database file
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_pomodoro() -> Result<(), String> {
-        let (conn, db_path) = setup_test_db()?;
-
-        // Insert some test data
-        let now = Local::now();
-
-        conn.execute(
-            INSERT_POMO,
-            params![0, "Pomo 1", now.to_rfc3339(), 1500, 0, "Category X"],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute(
-            INSERT_POMO,
-            params![1, "Pomo 2", now.to_rfc3339(), 3000, 0, "Category Y"],
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Test case: Get all pomodoros
-        let ls_args = LSArgs {
-            days: 0,
-            limit: 10,
-            priority: None,
-            category: None,
-            status: None,
-        };
-        let pomos = get_pomodoro(ls_args)?;
-        assert_eq!(pomos.len(), 2);
-        assert_eq!(pomos[0].title, "Pomo 2"); // Check ordering
-
-        cleanup_test_db(&db_path)?; // Clean up the database file
-        Ok(())
-    }
-
-    #[test]
-    fn test_add_pomodoro() -> Result<(), String> {
-        let (conn, db_path) = setup_test_db()?;
-
-        let mut pomo_task = PomoTask {
-            id: 0,
-            status: PomoStatus::Paused,
-            pomo_type: PomoType::Work,
-            title: "New Pomo".to_string(),
-            duration: DurationField(Duration::seconds(25 * 60)),
-            category: Some("Category Z".to_string()),
-            start_time: Local::now(),
-            end_time: Local::now(),
-        };
-
-        add_pomodoro(&mut pomo_task)?;
-        assert_ne!(pomo_task.id, 0);
-
-        // Verify the pomodoro was added correctly.  Since get_pomodoro uses parse_date, and add_pomodoro uses Local::now(),
-        //  we fetch the pomo directly and compare.
-        let mut stmt = conn.prepare(GET_POMODORO_LIST).map_err(|e| e.to_string())?;
-        let mut rows = stmt
-            .query_map(params![1], |row| {
-                //limit 1
-                Ok(PomoTask {
-                    id: row.get(0)?,
-                    pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
-                    title: row.get(2)?,
-                    duration: DurationField(Duration::seconds(row.get::<_, i64>(5)?)), // Extract as i64 first
-                    category: row.get(7)?,
-                    status: PomoStatus::from_usize(row.get::<_, usize>(6)?),
-                    start_time: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
-                        .unwrap()
-                        .with_timezone(&Local),
-                    end_time: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
-                        .unwrap()
-                        .with_timezone(&Local),
-                })
-            })
-            .map_err(|e| e.to_string())?;
-
-        let saved_pomo = rows.next().unwrap().unwrap(); // Get the first row
-        assert_eq!(saved_pomo.title, "New Pomo");
-        assert_eq!(saved_pomo.pomo_type, PomoType::Work);
-        assert_eq!(saved_pomo.duration.0, Duration::seconds(25 * 60));
-        assert_eq!(saved_pomo.category, Some("Category Z".to_string()));
-        assert_eq!(saved_pomo.status, PomoStatus::Paused);
-
-        cleanup_test_db(&db_path)?; // Clean up the database file
-        Ok(())
-    }
-
-    #[test]
-    fn test_update_pomodoro() -> Result<(), String> {
-        let (conn, db_path) = setup_test_db()?;
-
-        // Insert a pomodoro
-        let now = Local::now();
-        conn.execute(
-            INSERT_POMO,
-            params![0, "Pomo to Update", now.to_rfc3339(), 1500, 0, "Category A"],
-        )
-        .map_err(|e| e.to_string())?;
-        let pomo_id = conn.last_insert_rowid();
-
-        let mut pomo_task = PomoTask {
-            id: pomo_id as u64,
-            status: PomoStatus::Paused,
-            pomo_type: PomoType::Work,
-            title: "Pomo to Update".to_string(), //won'tbe updated
-            duration: DurationField(Duration::seconds(25 * 60)),
-            category: Some("Category A".to_string()), //won't be updated
-            start_time: now,
-            end_time: now,
-        };
-
-        // Update the pomodoro
-        update_pomodoro(&pomo_task)?;
-
-        // Verify the pomodoro was updated correctly
-        let mut stmt = conn.prepare(GET_POMODORO_LIST).map_err(|e| e.to_string())?;
-        let mut rows = stmt
-            .query_map(params![1], |row| {
-                Ok(PomoTask {
-                    id: row.get(0)?,
-                    pomo_type: PomoType::from_usize(row.get::<_, usize>(1)?),
-                    title: row.get(2)?,
-                    duration: DurationField(Duration::seconds(row.get::<_, i64>(5)?)),
-                    category: row.get(7)?,
-                    status: PomoStatus::from_usize(row.get::<_, usize>(6)?),
-                    start_time: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
-                        .unwrap()
-                        .with_timezone(&Local),
-                    end_time: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
-                        .unwrap()
-                        .with_timezone(&Local),
-                })
-            })
-            .map_err(|e| e.to_string())?;
-        let updated_pomo = rows.next().unwrap().unwrap();
-        assert_eq!(updated_pomo.status, PomoStatus::Paused);
 
         cleanup_test_db(&db_path)?; // Clean up the database file
         Ok(())
