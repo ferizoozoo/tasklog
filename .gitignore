@@ -4,3 +4,7 @@
 .vscode
 
 *.todo.md
+.idea
+.vscode
+
+*.todo.md
