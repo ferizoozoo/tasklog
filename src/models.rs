@@ -243,21 +243,15 @@ impl TableRow for Task {
 #[derive(Args, Debug)]
 pub struct AnalyzeArgs {
     /// Analyze tasks for n days before now
-    #[arg(long="days",short = 'n', value_parser = parse_date, default_value="1d")]
-    pub days: DateTime<Local>,
+    #[arg(long = "days", short = 'n', default_value_t = 1)]
+    pub days: u32,
 }
 
 impl CommandArgs for AnalyzeArgs {
     fn validate(&self) -> Result<(), String> {
-        let today = Local::now();
-        if let Some(next_year) = today.with_year(today.year() + 1) {
-            if self.days > next_year {
-                return Err("Days cannot be greater than 365".to_string());
-            };
-        } else {
+        if self.days > 365 {
             return Err("Days cannot be greater than 365".to_string());
         }
-
         Ok(())
     }
 }
@@ -615,8 +609,8 @@ pub fn parse_date(s: &str) -> Result<DateTime<Local>, String> {
     let val = value as i64;
     match unit {
         "d" => Ok(Local::now() + Duration::days(val)),
-        // Simply using date.with_moth will cause some errors when the month value geos beyond 12 
-        "m" => Ok(Local::now() + Duration::days(val * 30)), 
+        // Simply using date.with_moth will cause some errors when the month value geos beyond 12
+        "m" => Ok(Local::now() + Duration::days(val * 30)),
         "y" => {
             let date = Local::now();
             match date.with_year(date.year() + (value as i32)) {
@@ -666,4 +660,66 @@ pub struct AppState {
     pub term_height: u16,
     pub current_time: std::time::Duration,
     pub quited: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DailyAnalysis {
+    pub date: String,
+    pub total: u64,
+    pub pending: u64,
+    pub delivered_over_due: u64,
+    pub burn_down_rate: f64,
+}
+
+impl TableRow for DailyAnalysis {
+    fn headers(&self) -> Vec<&'static str> {
+        vec![
+            "Date",
+            "Total Tasks",
+            "Pending Tasks",
+            "Delivered Over Due",
+            "Burn Down Rate (%)",
+        ]
+    }
+
+    fn row(&self) -> Vec<String> {
+        vec![
+            self.date.clone(),
+            format!("{:.2}", self.total),
+            format!("{:.2}", self.pending),
+            format!("{:.2}", self.delivered_over_due),
+            format!("{:.2}%", self.burn_down_rate),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PomoAnalysis {
+    pub date: String,
+    pub total_sessions: u32,
+    pub total_duration: DurationField,
+    pub average_duration: DurationField,
+    pub done_to_pause_ratio: f64,
+}
+
+impl TableRow for PomoAnalysis {
+    fn headers(&self) -> Vec<&'static str> {
+        vec![
+            "Date",
+            "Total Sessions",
+            "Total Duration",
+            "Average Duration",
+            "Done to Pause Ratio",
+        ]
+    }
+
+    fn row(&self) -> Vec<String> {
+        vec![
+            self.date.clone(),
+            self.total_sessions.to_string(),
+            String::from(self.total_duration.clone()),
+            String::from(self.average_duration.clone()),
+            format!("{:.2}", self.done_to_pause_ratio),
+        ]
+    }
 }

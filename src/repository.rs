@@ -1,7 +1,7 @@
-use crate::models::{DurationField, PomoStatus};
+use crate::models::{AnalyzeArgs, DurationField, PomoStatus};
 use crate::{
     helper::get_home_directory,
-    models::{LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
+    models::{DailyAnalysis, LSArgs, PomoTask, PomoType, Priority, Task, TaskStatus},
 };
 use chrono::{DateTime, Local};
 use rusqlite::{named_params, params, Connection, ToSql};
@@ -83,6 +83,46 @@ const GET_POMODORO_LIST: &str = r#"
     FROM pomodoro
     ORDER BY start_time DESC
     limit :limit
+"#;
+
+/// Count All the tasks that are done and ones that are pending
+const GET_TASK_ANALYTICS: &str = r#"
+WITH due_dates AS (SELECT
+    DATE(due_date) AS date,
+    COUNT(*) as total, 
+    COUNT (CASE WHEN status = 0 THEN 1 ELSE null END) AS pending,
+    COUNT (CASE WHEN (status = 1 and DATE(updated_at) >= DATE(due_date)) THEN 1 ELSE null END) AS delivered_over_due
+    FROM tasks
+    WHERE due_date >= :start_date AND due_date <=  :end_date
+    GROUP BY DATE(due_date)
+    )
+SELECT 
+    dd.date,
+    dd.total, 
+    dd.delivered_over_due, 
+    dd.pending,
+    ( (dd.total - dd.pending - dd.delivered_over_due) * 100.00 ) / dd.total as burn_down_rate
+FROM 
+    due_dates dd 
+ORDER BY 
+    dd.date 
+DESC
+"#;
+
+const GET_PROMODO_ANALYTICS: &str = r#"
+    SELECT 
+        DATE(start_time) AS date,
+        COUNT(*) AS total,
+        SUM(duration) AS total_duration,
+        COUNT(
+            CASE WHEN status = 2 THEN 1 ELSE NULL END
+        ) AS done,
+        COUNT(
+            CASE WHEN status = 1 THEN 1 ELSE NULL END
+        ) AS paused
+    FROM pomodoro 
+    WHERE start_time >= :date AND start_time <= DATE('now')
+    GROUP BY DATE(start_time)
 "#;
 
 // NOTE: The 'Connection' as Ok value type of Result can become more generic later
@@ -336,6 +376,80 @@ pub fn update_pomodoro(pomo: &PomoTask) -> Result<(), String> {
     }
 }
 
+pub fn get_analysis(ls_args: &AnalyzeArgs) -> Result<Vec<DailyAnalysis>, String> {
+    let conn = match get_connection() {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let base_date_time = Local::now() - chrono::Duration::days(ls_args.days as i64);
+    let base_date = base_date_time.to_utc();
+    let end_date = (Local::now() + chrono::Duration::days(ls_args.days as i64)).to_utc();
+
+    let mut stmt = match conn.prepare(GET_TASK_ANALYTICS) {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let daily_analytics_iter = stmt.query_map(
+        named_params! {
+            ":start_date": base_date.to_rfc3339(),
+            ":end_date": end_date.to_rfc3339(),
+        },
+        parse_daily_analysis,
+    );
+
+    let daily_analytics_iter = match daily_analytics_iter {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let mut daily_analytics: Vec<DailyAnalysis> = Vec::new();
+
+    for daily_analysis in daily_analytics_iter {
+        let daily_analysis = match daily_analysis {
+            Ok(val) => val,
+            Err(err) => return Err(err.to_string()),
+        };
+
+        daily_analytics.push(daily_analysis);
+    }
+
+    Ok(daily_analytics)
+}
+
+pub fn get_pomodoro_analyisis(ls_args: &AnalyzeArgs) -> Result<Vec<PomoTask>, String> {
+    let conn = match get_connection() {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let mut stmt = match conn.prepare(GET_PROMODO_ANALYTICS) {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let pomo_tasks_iter = stmt.query_map(
+        named_params! {
+            ":days": ls_args.days,
+        },
+        parse_pomo_task,
+    );
+
+    let pomo_tasks_iter = match pomo_tasks_iter {
+        Ok(val) => val,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let mut pomo_tasks: Vec<PomoTask> = Vec::new();
+
+    for pomo_task in pomo_tasks_iter {
+        pomo_tasks.push(pomo_task.unwrap());
+    }
+
+    Ok(pomo_tasks)
+}
+
 fn parse_task(row: &rusqlite::Row) -> Result<Task, rusqlite::Error> {
     let date_str: String = row.get::<_, String>(3)?;
     let due_date: DateTime<Local> = DateTime::parse_from_rfc3339(&date_str)
@@ -371,5 +485,15 @@ fn parse_pomo_task(row: &rusqlite::Row) -> Result<PomoTask, rusqlite::Error> {
         status: PomoStatus::from_usize(row.get::<_, usize>(6)?),
         start_time: start_date,
         end_time: end_date,
+    })
+}
+
+fn parse_daily_analysis(row: &rusqlite::Row) -> Result<DailyAnalysis, rusqlite::Error> {
+    Ok(DailyAnalysis {
+        date: row.get::<_, String>(0)?,
+        total: row.get(1)?,
+        pending: row.get(2)?,
+        delivered_over_due: row.get(3)?,
+        burn_down_rate: row.get(4)?,
     })
 }

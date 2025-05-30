@@ -15,20 +15,20 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// When we have to map types 10000000000000000000 times in rust the most simple tasks like passing
-/// to a fucking function, why the fuck they say Rust's performance is good?????????
 pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
     args.validate().map_err(|e| format!("Err: {}", e))?;
 
     let t: Vec<Box<dyn TableRow>> = match args.ls_type {
         LSType::Task => repository::get_tasks(args)
-            .map_err(|e| format_string_with_color(e.as_str(), Color::Red))?
+            .map_err(|e| format_string_with_color(e.as_str(), Color::Red))
+            .unwrap()
             .into_iter()
             .map(|t| Box::new(t) as Box<dyn TableRow>)
             .collect(),
 
         LSType::Pomo => repository::get_pomodoro(args)
-            .map_err(|e| format_string_with_color(e.as_str(), Color::Red))?
+            .map_err(|e| format_string_with_color(e.as_str(), Color::Red))
+            .unwrap()
             .into_iter()
             .map(|t| Box::new(t) as Box<dyn TableRow>)
             .collect(),
@@ -36,11 +36,15 @@ pub fn handle_ls(args: &LSArgs) -> Result<(), String> {
 
     let due_date = Local::now() + chrono::Duration::days(args.days as i64);
     let text = format_string_with_color(
-        format!("Results tasks with due_date as {} or before:\n", due_date.format("%Y-%m-%d")).as_str(),
+        format!(
+            "Results tasks with due_date as {} or before:\n",
+            due_date.format("%Y-%m-%d")
+        )
+        .as_str(),
         Color::Green,
     );
 
-    println!("{}",text);
+    println!("{}", text);
     helper::print_tables(&t)
 }
 
@@ -61,8 +65,19 @@ pub fn handle_init_db() -> Result<(), String> {
     repository::init_db(home_dir)
 }
 
-pub fn handle_analyze(_: AnalyzeArgs) -> Result<(), String> {
-    Err("Not implemented yet".to_string())
+pub fn handle_analyze(analyze_args: AnalyzeArgs) -> Result<(), String> {
+    analyze_args.validate().map_err(|e| format!("Err: {}", e))?;
+
+    let mut analysis_volumes: Vec<Box<dyn TableRow>>;
+    analysis_volumes = repository::get_analysis(&analyze_args)
+        .map_err(|e| format!("Err: {}", e))
+        .unwrap()
+        .into_iter()
+        .map(|t| Box::new(t) as Box<dyn TableRow>)
+        .collect();
+
+    helper::print_tables(&analysis_volumes).map_err(|e| format!("Error printing tables: {}", e))?;
+    Ok(())
 }
 
 pub fn handle_done(done_args: DoneArgs) -> Result<(), String> {
